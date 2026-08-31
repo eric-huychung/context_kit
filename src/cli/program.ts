@@ -12,6 +12,7 @@ import { registerDeleteCommand } from './commands/delete.js';
 import { registerScanCommand } from './commands/scan.js';
 import { registerUsageCommand } from './commands/usage.js';
 import { registerRulesCommand } from './commands/rules.js';
+import { registerDoctorCommand } from './commands/doctor.js';
 import { engineAsDiscover, type Discover } from '../backend/discover.js';
 
 /**
@@ -39,6 +40,7 @@ export function createProgram(engine: ICollectionEngine, discover: Discover = en
   registerScanCommand(program, engine);
   registerUsageCommand(program, engine);
   registerRulesCommand(program, engine);
+  registerDoctorCommand(program, engine);
 
   return program;
 }
