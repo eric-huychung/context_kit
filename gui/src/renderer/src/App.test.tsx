@@ -32,7 +32,7 @@ describe('App', () => {
     renderWithProviders(<App />);
 
     expect(screen.getByText('Skil')).toBeInTheDocument();
-    expect(screen.getByText('skil 0.3.0')).toBeInTheDocument();
+    expect(screen.getByText('skil 0.4.0')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Commands' })).toHaveAttribute('aria-selected', 'true');
     expect(await screen.findByRole('heading', { name: 'Commands' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open Cursor workspace' })).not.toBeInTheDocument();

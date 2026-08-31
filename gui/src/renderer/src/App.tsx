@@ -12,6 +12,7 @@ import CreateCollectionForm from './components/CreateCollectionForm';
 import InboxPanel from './components/InboxPanel';
 import MarketDiscover from './components/MarketDiscover';
 import RulesPanel from './components/RulesPanel';
+import SettingsDialog from './components/SettingsDialog';
 
 type WorkspaceTab = 'config' | 'search' | 'inbox' | 'collections' | 'rules';
 
@@ -372,6 +373,7 @@ export default function App() {
   const bridge = useBridge();
   const [tab, setTab] = useState<WorkspaceTab>('collections');
   const [helpOpen, setHelpOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
   const [lastScannedAt, setLastScannedAt] = useState<Date | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -467,6 +469,7 @@ export default function App() {
           </div>
         )}
         <div className="top-actions">
+          <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
           <ThemeToggle />
         </div>
       </header>
@@ -531,7 +534,7 @@ export default function App() {
           />
         )}
 
-        {tab === 'search' && <MarketDiscover />}
+        {tab === 'search' && <MarketDiscover onOpenSettings={() => setSettingsOpen(true)} />}
 
         {tab === 'inbox' && <InboxPanel key={boundRoot ?? 'session'} />}
 
@@ -548,7 +551,7 @@ export default function App() {
         <span>
           <span className="live-dot" aria-hidden="true" />
         </span>
-        <span>skil 0.3.0</span>
+        <span>skil 0.4.0</span>
       </footer>
 
       {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
