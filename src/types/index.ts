@@ -165,6 +165,16 @@ export interface CommandHealth {
 /** `health()`'s return shape: one row per command on the project map. */
 export type HealthReport = CommandHealth[];
 
+/**
+ * `suggest()`'s return shape: an ordered id shortlist (~15-20), fingerprint-
+ * ranked against `package.json` deps and the existing catalog, then LLM-
+ * reranked. Ids only — the caller already has shelf name/installs data to
+ * display a row.
+ */
+export interface SuggestResult {
+  ids: string[];
+}
+
 /** Outcome of `scan()` — pull. */
 export interface ScanResult {
   added: string[];

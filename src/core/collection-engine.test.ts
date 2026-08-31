@@ -1,13 +1,14 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { isErr, isOk } from './result.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { err, isErr, isOk, ok } from './result.js';
 import { CollectionEngine, STATE_PATH } from './collection-engine.js';
 import { InMemoryFileSystemAdapter } from '../adapters/in-memory-fs.js';
 import { InMemorySkillsAdapter } from '../adapters/in-memory-skills.js';
 import { InMemoryUsageCollector } from '../adapters/in-memory-usage.js';
 import { RealFileSystemAdapter } from '../adapters/real-fs-adapter.js';
 import type { IDE } from '../types/index.js';
+import type { LlmChat } from '../llm/llm-chat.js';
 
 /**
  * Mimics `npx skills add --agent universal` (vercel-labs/skills): dumps
@@ -1543,6 +1544,166 @@ describe('CollectionEngine', () => {
       const before = fs.readJSON(STATE_PATH);
 
       await engine.health();
+
+      expect(fs.readJSON(STATE_PATH)).toEqual(before);
+    });
+
+    describe('with an LlmChat', () => {
+      function fakeChat(response: string): LlmChat {
+        return { complete: async () => ok(response) };
+      }
+
+      it('adds conflict/vague findings and marks usedLlm true for a command with filed skills', async () => {
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+        fs.writeFile('.cursor/skills/refactor/SKILL.md', '# refactor\n');
+        engine.scan();
+        engine.create('build', ['tdd', 'refactor']);
+        const chat = fakeChat(
+          JSON.stringify({ conflicts: [{ a: 'tdd', b: 'refactor', why: 'both fire on the same trigger' }], vague: [] })
+        );
+        const withLlm = new CollectionEngine(fs, skills, undefined, undefined, chat);
+
+        const result = await withLlm.health();
+
+        expect(isOk(result)).toBe(true);
+        if (isOk(result)) {
+          const build = result.value.find((row) => row.name === 'build');
+          expect(build?.usedLlm).toBe(true);
+          expect(build?.findings).toContainEqual(
+            expect.objectContaining({ type: 'conflict', skillId: 'tdd' })
+          );
+        }
+      });
+
+      it('does not call the LLM for a command with no filed skills, and usedLlm stays false', async () => {
+        engine.create('empty', []);
+        const complete = vi.fn(async () => ok('{}'));
+        const withLlm = new CollectionEngine(fs, skills, undefined, undefined, { complete });
+
+        const result = await withLlm.health();
+
+        expect(complete).not.toHaveBeenCalled();
+        expect(isOk(result)).toBe(true);
+        if (isOk(result)) {
+          expect(result.value.find((row) => row.name === 'empty')?.usedLlm).toBe(false);
+        }
+      });
+
+      it('degrades silently on a failed LLM call: usedLlm stays false and math+regex findings still populate', async () => {
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+        engine.scan();
+        engine.create('build', ['tdd']);
+        const withLlm = new CollectionEngine(fs, skills, undefined, undefined, {
+          complete: async () => err(new Error('LlmChat: openai rejected the API key (401).')),
+        });
+
+        const result = await withLlm.health();
+
+        expect(isOk(result)).toBe(true);
+        if (isOk(result)) {
+          const build = result.value.find((row) => row.name === 'build');
+          expect(build?.usedLlm).toBe(false);
+          expect(build?.findings.some((f) => f.type === 'conflict' || f.type === 'vague-trigger')).toBe(false);
+          expect(build?.findings.some((f) => f.type === 'unused')).toBe(true);
+        }
+      });
+
+      it('with no LlmChat injected, output is unchanged from Phase 1 (no conflict/vague findings ever appear)', async () => {
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+        engine.scan();
+        engine.create('build', ['tdd']);
+
+        const result = await engine.health();
+
+        expect(isOk(result)).toBe(true);
+        if (isOk(result)) {
+          const build = result.value.find((row) => row.name === 'build');
+          expect(build?.usedLlm).toBe(false);
+          expect(build?.findings.some((f) => f.type === 'conflict' || f.type === 'vague-trigger')).toBe(false);
+        }
+      });
+    });
+  });
+
+  describe('suggest', () => {
+    const shelves = [
+      {
+        slug: 'swe',
+        label: 'SWE',
+        fields: [
+          {
+            slug: 'frontend',
+            label: 'Frontend',
+            skills: [
+              { id: 'obra/react-patterns', name: 'React patterns', installs: 1200, rank: 1 },
+              { id: 'vercel-labs/nextjs-guide', name: 'Next.js guide', installs: 500, rank: 2 },
+            ],
+          },
+        ],
+      },
+    ];
+
+    it('returns NEED_KEY and never touches shelves when no LlmChat is injected', async () => {
+      const result = await engine.suggest(shelves);
+
+      expect(isErr(result)).toBe(true);
+      if (isErr(result)) {
+        expect(result.error.message).toBe('NEED_KEY');
+      }
+    });
+
+    it('with a key: ranks a fixture shelf by package.json deps into a shortlist', async () => {
+      fs.writeFile('package.json', JSON.stringify({ dependencies: { react: '^18.0.0' } }));
+      const chat: LlmChat = {
+        complete: async () => ok(JSON.stringify({ ids: ['obra/react-patterns', 'vercel-labs/nextjs-guide'] })),
+      };
+      const withLlm = new CollectionEngine(fs, skills, undefined, undefined, chat);
+
+      const result = await withLlm.suggest(shelves);
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.ids).toEqual(['obra/react-patterns', 'vercel-labs/nextjs-guide']);
+      }
+    });
+
+    it('excludes ids already in the catalog', async () => {
+      fs.writeFile('.cursor/skills/obra/react-patterns/SKILL.md', '# react patterns\n');
+      engine.scan();
+      const chat: LlmChat = {
+        complete: async () => ok(JSON.stringify({ ids: ['obra/react-patterns', 'vercel-labs/nextjs-guide'] })),
+      };
+      const withLlm = new CollectionEngine(fs, skills, undefined, undefined, chat);
+
+      const result = await withLlm.suggest(shelves);
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.ids).not.toContain('obra/react-patterns');
+      }
+    });
+
+    it('falls back to the fingerprint-only order when the LLM call fails', async () => {
+      fs.writeFile('package.json', JSON.stringify({ dependencies: { react: '^18.0.0' } }));
+      const withLlm = new CollectionEngine(fs, skills, undefined, undefined, {
+        complete: async () => err(new Error('LlmChat: openai rejected the API key (401).')),
+      });
+
+      const result = await withLlm.suggest(shelves);
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.ids).toEqual(['obra/react-patterns', 'vercel-labs/nextjs-guide']);
+      }
+    });
+
+    it('persists nothing to state.json', async () => {
+      const before = fs.readJSON(STATE_PATH);
+      const withLlm = new CollectionEngine(fs, skills, undefined, undefined, {
+        complete: async () => ok(JSON.stringify({ ids: [] })),
+      });
+
+      await withLlm.suggest(shelves);
 
       expect(fs.readJSON(STATE_PATH)).toEqual(before);
     });

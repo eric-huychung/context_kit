@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { computeSkillFindings, estimateTokens, parseDescription } from './health-checks.js';
+import { computeLlmFindings, computeSkillFindings, estimateTokens, parseDescription } from './health-checks.js';
+import { isErr, isOk, ok, err } from './result.js';
+import type { LlmChat } from '../llm/llm-chat.js';
+
+function fakeLlmChat(response: string): LlmChat {
+  return { complete: async () => ok(response) };
+}
 
 describe('parseDescription', () => {
   it('reads the description field out of frontmatter', () => {
@@ -66,5 +72,78 @@ describe('computeSkillFindings', () => {
   it('does not flag ordinary prose as a secret', () => {
     const findings = computeSkillFindings({ ...base, body: 'This skill helps you skip flaky tests.' });
     expect(findings.some((finding) => finding.type === 'secret')).toBe(false);
+  });
+});
+
+describe('computeLlmFindings', () => {
+  const skills = [
+    { skillId: 'tdd', description: 'Use for test-driven development.', body: '# tdd\n' },
+    { skillId: 'testing/refactor', description: 'Use for refactoring code under test.', body: '# refactor\n' },
+  ];
+
+  it('returns no findings without calling the LLM when there are no filed skills', async () => {
+    const chat: LlmChat = { complete: async () => err(new Error('should not be called')) };
+
+    const result = await computeLlmFindings([], chat);
+
+    expect(isOk(result) && result.value).toEqual([]);
+  });
+
+  it('returns empty conflicts/vague as no findings', async () => {
+    const chat = fakeLlmChat(JSON.stringify({ conflicts: [], vague: [] }));
+
+    const result = await computeLlmFindings(skills, chat);
+
+    expect(isOk(result) && result.value).toEqual([]);
+  });
+
+  it('turns a conflict pair into one finding per skill', async () => {
+    const chat = fakeLlmChat(
+      JSON.stringify({ conflicts: [{ a: 'tdd', b: 'testing/refactor', why: 'both claim to own the test loop' }], vague: [] })
+    );
+
+    const result = await computeLlmFindings(skills, chat);
+
+    expect(isOk(result)).toBe(true);
+    if (isOk(result)) {
+      expect(result.value).toEqual([
+        { type: 'conflict', skillId: 'tdd', message: expect.stringContaining('testing/refactor') },
+        { type: 'conflict', skillId: 'testing/refactor', message: expect.stringContaining('tdd') },
+      ]);
+    }
+  });
+
+  it('turns a vague entry into one finding', async () => {
+    const chat = fakeLlmChat(JSON.stringify({ conflicts: [], vague: [{ id: 'tdd', why: 'description is too generic' }] }));
+
+    const result = await computeLlmFindings(skills, chat);
+
+    expect(isOk(result) && result.value).toEqual([{ type: 'vague-trigger', skillId: 'tdd', message: 'description is too generic' }]);
+  });
+
+  it('drops rows referencing an id that was not in the input', async () => {
+    const chat = fakeLlmChat(
+      JSON.stringify({ conflicts: [{ a: 'tdd', b: 'not-filed', why: 'x' }], vague: [{ id: 'not-filed', why: 'x' }] })
+    );
+
+    const result = await computeLlmFindings(skills, chat);
+
+    expect(isOk(result) && result.value).toEqual([]);
+  });
+
+  it('returns no findings, not a crash, on non-JSON output', async () => {
+    const chat = fakeLlmChat('not json');
+
+    const result = await computeLlmFindings(skills, chat);
+
+    expect(isOk(result) && result.value).toEqual([]);
+  });
+
+  it('propagates an LLM call failure as an Err', async () => {
+    const chat: LlmChat = { complete: async () => err(new Error('LlmChat: openai rejected the API key (401).')) };
+
+    const result = await computeLlmFindings(skills, chat);
+
+    expect(isErr(result)).toBe(true);
   });
 });

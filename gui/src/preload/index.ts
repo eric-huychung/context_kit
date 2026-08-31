@@ -41,6 +41,10 @@ const bridge: SkilBridge = {
   listLeftovers: () => ipcRenderer.invoke(IPC_CHANNELS.listLeftovers),
   adoptLeftovers: (ids) => ipcRenderer.invoke(IPC_CHANNELS.adoptLeftovers, ids),
   health: () => ipcRenderer.invoke(IPC_CHANNELS.health),
+  hasLlmKey: () => ipcRenderer.invoke(IPC_CHANNELS.hasLlmKey),
+  saveLlmSettings: (provider, apiKey) => ipcRenderer.invoke(IPC_CHANNELS.saveLlmSettings, provider, apiKey),
+  pingLlm: () => ipcRenderer.invoke(IPC_CHANNELS.pingLlm),
+  suggest: (shelves) => ipcRenderer.invoke(IPC_CHANNELS.suggest, shelves),
 };
 
 contextBridge.exposeInMainWorld('skil', bridge);

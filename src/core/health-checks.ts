@@ -1,5 +1,7 @@
 import { load as loadYaml } from 'js-yaml';
 import type { Finding } from '../types/index.js';
+import type { LlmChat } from '../llm/llm-chat.js';
+import { isOk, ok, type Result } from './result.js';
 
 /** Description length past this is "always loaded, rarely worth it" (idle-cost). */
 const IDLE_COST_CHAR_THRESHOLD = 400;
@@ -111,4 +113,95 @@ export function computeSkillFindings(opts: {
     secretFinding(opts.skillId, opts.body),
   ];
   return findings.filter((finding): finding is Finding => finding !== null);
+}
+
+/** One filed skill's text, trimmed for the LLM prompt. */
+export interface LlmFindingsSkillInput {
+  skillId: string;
+  description: string;
+  body: string;
+}
+
+/** Body excerpt cap per skill in the LLM prompt — enough context, bounded tokens. */
+const BODY_EXCERPT_CHARS = 500;
+const LLM_FINDINGS_MAX_TOKENS = 600;
+
+function llmFindingsSystemPrompt(): string {
+  return [
+    'You audit AI skills filed together on one command, looking for two real failure modes only:',
+    '1) "conflict": two skills whose descriptions/triggers overlap enough that an agent could invoke the wrong one, or that give contradictory instructions.',
+    '2) "vague-trigger": a description too generic to reliably fire when it should (e.g. "helps with code" instead of naming a concrete task or trigger phrase).',
+    'Most skill sets have none of either — only flag real problems, never shared generic words like "help", "code", or "review" alone.',
+    'Reply with strict JSON and nothing else: {"conflicts":[{"a":"<id>","b":"<id>","why":"<one line>"}],"vague":[{"id":"<id>","why":"<one line>"}]}.',
+    'Empty arrays are the expected, common answer.',
+  ].join(' ');
+}
+
+function toPromptSkill(skill: LlmFindingsSkillInput): { id: string; description: string; bodyExcerpt: string } {
+  return { id: skill.skillId, description: skill.description, bodyExcerpt: skill.body.slice(0, BODY_EXCERPT_CHARS) };
+}
+
+function parseLlmFindings(content: string, knownIds: ReadonlySet<string>): Finding[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return [];
+  }
+
+  const findings: Finding[] = [];
+
+  const conflicts = (parsed as { conflicts?: unknown }).conflicts;
+  if (Array.isArray(conflicts)) {
+    for (const row of conflicts) {
+      if (!row || typeof row !== 'object') continue;
+      const a = (row as { a?: unknown }).a;
+      const b = (row as { b?: unknown }).b;
+      const why = (row as { why?: unknown }).why;
+      if (typeof a !== 'string' || typeof b !== 'string' || typeof why !== 'string') continue;
+      if (a === b || !knownIds.has(a) || !knownIds.has(b)) continue;
+      findings.push({ type: 'conflict', skillId: a, message: `Overlaps with ${b} — ${why}` });
+      findings.push({ type: 'conflict', skillId: b, message: `Overlaps with ${a} — ${why}` });
+    }
+  }
+
+  const vague = (parsed as { vague?: unknown }).vague;
+  if (Array.isArray(vague)) {
+    for (const row of vague) {
+      if (!row || typeof row !== 'object') continue;
+      const id = (row as { id?: unknown }).id;
+      const why = (row as { why?: unknown }).why;
+      if (typeof id !== 'string' || typeof why !== 'string') continue;
+      if (!knownIds.has(id)) continue;
+      findings.push({ type: 'vague-trigger', skillId: id, message: why });
+    }
+  }
+
+  return findings;
+}
+
+/**
+ * LLM slice on `health()`: one call over a command's filed skills →
+ * conflict pairs + vague triggers. Only called when an `LlmChat` is
+ * injected. A network/parse failure returns an `Err` so the caller can
+ * leave `usedLlm: false` and keep the report Phase-1-shaped — a bad key
+ * degrades silently here; `pingLlm` is where it surfaces clearly.
+ */
+export async function computeLlmFindings(skills: LlmFindingsSkillInput[], llmChat: LlmChat): Promise<Result<Finding[]>> {
+  if (skills.length === 0) {
+    return ok([]);
+  }
+  const knownIds = new Set(skills.map((skill) => skill.skillId));
+  const result = await llmChat.complete({
+    system: llmFindingsSystemPrompt(),
+    user: JSON.stringify(skills.map(toPromptSkill)),
+    maxTokens: LLM_FINDINGS_MAX_TOKENS,
+  });
+  if (!isOk(result)) {
+    return result;
+  }
+  return ok(parseLlmFindings(result.value, knownIds));
 }

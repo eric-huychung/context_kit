@@ -1,8 +1,9 @@
 import type { Result } from '../../../src/core/result.js';
-import type { AdoptResult, BrowseView, Collection, CommandHealth, Finding, HealthReport, IDE, LeftoverRecord, OriginCheck, OriginStatus, RuleRecord, ScanResult, Skill, SkillRecord, UsageRow } from '../../../src/types/index.js';
+import type { AdoptResult, BrowseView, Collection, CommandHealth, Finding, HealthReport, IDE, LeftoverRecord, OriginCheck, OriginStatus, RuleRecord, ScanResult, Skill, SkillRecord, SuggestResult, UsageRow } from '../../../src/types/index.js';
 import type { MarketSearchRow, ShelfRole } from '../../../src/backend/market-types.js';
+import type { LlmProvider } from '../../../src/llm/llm-chat.js';
 
-export type { AdoptResult, BrowseView, Collection, CommandHealth, Finding, HealthReport, IDE, LeftoverRecord, MarketSearchRow, OriginCheck, OriginStatus, Result, RuleRecord, ScanResult, ShelfRole, Skill, SkillRecord, UsageRow };
+export type { AdoptResult, BrowseView, Collection, CommandHealth, Finding, HealthReport, IDE, LeftoverRecord, LlmProvider, MarketSearchRow, OriginCheck, OriginStatus, Result, RuleRecord, ScanResult, ShelfRole, Skill, SkillRecord, SuggestResult, UsageRow };
 
 /**
  * Client-side shape of `GET /api/market/preview`'s `data` — not exported by
@@ -59,6 +60,10 @@ export const IPC_CHANNELS = {
   listLeftovers: 'skil:list-leftovers',
   adoptLeftovers: 'skil:adopt-leftovers',
   health: 'skil:health',
+  hasLlmKey: 'skil:has-llm-key',
+  saveLlmSettings: 'skil:save-llm-settings',
+  pingLlm: 'skil:ping-llm',
+  suggest: 'skil:suggest',
 } as const;
 
 /**
@@ -144,9 +149,27 @@ export interface SkilBridge {
   /** "Use ours and remove leftovers": copies missing ids into the live pair, then moves old paths to `.skil/deprecated/`. */
   adoptLeftovers(ids?: string[]): Promise<Result<AdoptResult>>;
   /**
-   * Doctor pass, math + regex only in this phase (no key required):
-   * one row per command with a token-ish cost, a warn count, and the
-   * findings behind it.
+   * Doctor pass. Math + regex findings always populate; conflict /
+   * vague-trigger findings on a command also appear once a key is
+   * saved (`usedLlm: true` on that row).
    */
   health(): Promise<Result<HealthReport>>;
+  /** Whether a usable BYOK key is currently saved. Never returns the key itself. */
+  hasLlmKey(): Promise<boolean>;
+  /**
+   * Encrypts and saves provider + key (Electron `safeStorage`), then
+   * rebinds the current session's engine so `health()` picks it up
+   * immediately. The renderer never sees the key again after this call.
+   */
+  saveLlmSettings(provider: LlmProvider, apiKey: string): Promise<Result<void>>;
+  /** 1-token call against the currently saved key. No saved key is an error. */
+  pingLlm(): Promise<Result<void>>;
+  /**
+   * Fingerprint + LLM-rerank a shortlist of market ids not already in the
+   * catalog. Requires a saved key — `Err('NEED_KEY')` otherwise. The
+   * Discover Suggestion tab gates this behind its own empty states so it
+   * is never called without a folder + key; `shelves` comes from
+   * `marketShelves()`, called by the caller, not fetched here.
+   */
+  suggest(shelves: ShelfRole[]): Promise<Result<SuggestResult>>;
 }

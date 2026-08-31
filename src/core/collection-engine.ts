@@ -15,8 +15,10 @@ import type {
   Skill,
   SkillRecord,
   State,
+  SuggestResult,
   UsageRow,
 } from '../types/index.js';
+import type { ShelfRole } from '../backend/market-types.js';
 import { err, isOk, ok, type Result } from './result.js';
 import { isCommandSkillStamp, isSkilStamped, parseStampedSkills, writeCommandFile, writeOpenAiYaml } from './command-file.js';
 import {
@@ -27,7 +29,10 @@ import {
   removeRuleSection,
   upsertRuleSection,
 } from './project-rules.js';
-import { computeSkillFindings, estimateTokens, parseDescription } from './health-checks.js';
+import { computeLlmFindings, computeSkillFindings, estimateTokens, parseDescription } from './health-checks.js';
+import type { LlmFindingsSkillInput } from './health-checks.js';
+import { parsePackageDeps, rankByFingerprint, rerankWithLlm, SUGGEST_MAX } from './suggest.js';
+import type { LlmChat } from '../llm/llm-chat.js';
 import {
   COMMAND_DIR_BY_IDE,
   COMMAND_EXTENSION_BY_IDE,
@@ -178,7 +183,8 @@ export class CollectionEngine implements ICollectionEngine {
     private readonly fs: IFileSystemAdapter,
     private readonly skillsAdapter: ISkillsAdapter,
     private readonly usageCollector: IUsageCollector = NOOP_USAGE,
-    private readonly projectRoot: string = process.cwd()
+    private readonly projectRoot: string = process.cwd(),
+    private readonly llmChat?: LlmChat
   ) {
     this.state = loadState(this.fs);
     this.mergeExternallyInstalledSkills();
@@ -241,9 +247,11 @@ export class CollectionEngine implements ICollectionEngine {
       }
     }
 
-    const report: CommandHealth[] = this.state.commands.map((command) => {
+    const report: CommandHealth[] = [];
+    for (const command of this.state.commands) {
       const findings = [];
       let tokenEstimate = 0;
+      const llmInputs: LlmFindingsSkillInput[] = [];
 
       for (const skillId of command.skills) {
         const record = this.state.skills.find((skill) => skill.id === skillId);
@@ -261,12 +269,40 @@ export class CollectionEngine implements ICollectionEngine {
             diskHashes: record ? this.hashesForPaths(record.paths) : new Set<string>(),
           })
         );
+        llmInputs.push({ skillId, description, body });
       }
 
-      return { name: command.name, tokenEstimate, warnCount: findings.length, findings, usedLlm: false };
-    });
+      let usedLlm = false;
+      if (this.llmChat && llmInputs.length > 0) {
+        const llmResult = await computeLlmFindings(llmInputs, this.llmChat);
+        if (isOk(llmResult)) {
+          findings.push(...llmResult.value);
+          usedLlm = true;
+        }
+      }
+
+      report.push({ name: command.name, tokenEstimate, warnCount: findings.length, findings, usedLlm });
+    }
 
     return ok(report);
+  }
+
+  async suggest(shelves: ShelfRole[]): Promise<Result<SuggestResult>> {
+    if (!this.llmChat) {
+      return err(new Error('NEED_KEY'));
+    }
+
+    const excludeIds = new Set(this.state.skills.map((skill) => skill.id));
+    const pkgJson = this.fs.readFile('package.json');
+    const deps = isOk(pkgJson) ? parsePackageDeps(pkgJson.value) : [];
+    const ranked = rankByFingerprint(shelves, deps, excludeIds);
+    if (ranked.length === 0) {
+      return ok({ ids: [] });
+    }
+
+    const reranked = await rerankWithLlm(ranked, deps, this.llmChat);
+    const ids = isOk(reranked) && reranked.value.length > 0 ? reranked.value : ranked.slice(0, SUGGEST_MAX).map((skill) => skill.id);
+    return ok({ ids });
   }
 
   create(name: string, skillIds: string[]): Result<Collection> {

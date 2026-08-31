@@ -1,4 +1,5 @@
 import type { Result } from '../core/result.js';
+import type { ShelfRole } from '../backend/market-types.js';
 import type {
   AdoptResult,
   BrowseView,
@@ -10,6 +11,7 @@ import type {
   ScanResult,
   Skill,
   SkillRecord,
+  SuggestResult,
   UsageRow,
 } from '../types/index.js';
 
@@ -226,4 +228,15 @@ export interface ICollectionEngine {
    * `originChecks()`.
    */
   health(): Promise<Result<HealthReport>>;
+
+  /**
+   * Fingerprints `package.json` deps/devDeps against the caller-supplied
+   * `shelves` (the engine never fetches these itself) to shortlist
+   * ~15-20 market ids not already in the catalog. Requires an injected
+   * `LlmChat` to rerank the fingerprint-only shortlist — without one,
+   * returns `Err('NEED_KEY')` and never touches `shelves`. A failed LLM
+   * call (bad key, network) falls back to the fingerprint-only order
+   * rather than erroring the whole call. Read-only: persists nothing.
+   */
+  suggest(shelves: ShelfRole[]): Promise<Result<SuggestResult>>;
 }
