@@ -247,6 +247,7 @@ ipcMain.handle(IPC_CHANNELS.adoptLeftovers, async (_event, ids?: string[]) => {
   muteOwnWrites();
   return result;
 });
+ipcMain.handle(IPC_CHANNELS.health, () => currentEngine().health());
 
 // Brand icon (regenerate via scripts/generate-icons.mjs). out/main -> gui/resources.
 const APP_ICON = join(import.meta.dirname, '../../resources/icon.png');

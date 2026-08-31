@@ -121,14 +121,18 @@ export default function RulesPanel({ onProjectBound: _onProjectBound }: { onProj
   const [rules, setRules] = useState<RuleRecord[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState(false);
+  const [flaggedIds, setFlaggedIds] = useState<Set<string>>(new Set());
   const refreshId = useRef(0);
 
   const refresh = useCallback(async () => {
     const id = ++refreshId.current;
-    const next = await bridge.listRules();
+    const [next, nextHealth] = await Promise.all([bridge.listRules(), bridge.health()]);
     if (id !== refreshId.current) return;
     setRules(next);
     setSelectedId((current) => (current && next.some((rule) => rule.id === current) ? current : null));
+    setFlaggedIds(
+      new Set(nextHealth.ok ? nextHealth.value.flatMap((row) => row.findings.map((finding) => finding.skillId)) : [])
+    );
   }, [bridge]);
 
   useEffect(() => {
@@ -189,6 +193,11 @@ export default function RulesPanel({ onProjectBound: _onProjectBound }: { onProj
                         aria-label={`Details for ${rule.name}`}
                       />
                       <span className="rule-card-name">{ruleFileName(rule.name)}</span>
+                      {flaggedIds.has(rule.id) && (
+                        <span className="finding-badge" aria-label={`${rule.name} has a doctor finding`}>
+                          Finding
+                        </span>
+                      )}
                       <SharedRuleToggle rule={rule} onToggle={(next) => void handleToggle(next)} />
                     </li>
                   ))}

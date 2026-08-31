@@ -39,6 +39,31 @@ describe('RulesPanel', () => {
     expect(screen.queryByRole('dialog', { name: 'pair-programming/behavior' })).not.toBeInTheDocument();
   });
 
+  it('shows a Finding badge on a rule row named by a doctor finding', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile(
+      'AGENTS.md',
+      '<!-- skil:rule pair-programming/behavior -->\n# behavior\n<!-- /skil:rule pair-programming/behavior -->\n'
+    );
+    const bridge = createTestBridge(engine);
+    bridge.health = async () => ({
+      ok: true,
+      value: [
+        {
+          name: 'build',
+          tokenEstimate: 10,
+          warnCount: 1,
+          usedLlm: false,
+          findings: [{ type: 'secret', skillId: 'pair-programming/behavior', message: 'looks risky' }],
+        },
+      ],
+    });
+
+    renderWithProviders(<RulesPanel />, { bridge });
+
+    expect(await screen.findByLabelText('pair-programming/behavior has a doctor finding')).toBeInTheDocument();
+  });
+
   it('opens a preview modal for a shared rule when its card is clicked', async () => {
     const { engine, fs } = createInMemoryWorkspace();
     fs.writeFile('AGENTS.md', '<!-- skil:rule behavior -->\n# Hello rule\n<!-- /skil:rule behavior -->\n');

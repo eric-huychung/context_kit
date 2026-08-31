@@ -79,6 +79,19 @@ describe('InboxPanel', () => {
     expect(await screen.findByText('tdd')).toBeInTheDocument();
   });
 
+  it('shows a Finding badge on a skill row when a doctor finding names it', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+    engine.scan();
+    engine.create('build', ['tdd']);
+    const bridge = createTestBridge(engine, { projectRoot: DEFAULT_TEST_PROJECT_ROOT });
+
+    renderWithProviders(<InboxPanel />, { bridge });
+
+    // tdd is filed but never read, so 'unused' always fires with no key.
+    expect(await screen.findByLabelText('tdd has a doctor finding')).toBeInTheDocument();
+  });
+
   it('groups Discover pulls under Market and scanned skills under Project', async () => {
     const { engine, fs } = createInMemoryWorkspace();
     fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');

@@ -348,6 +348,59 @@ describe('CollectionList', () => {
     expect(within(screen.getByRole('region', { name: 'Command build details' })).getByRole('button', { name: 'Turn on build' })).toBeInTheDocument();
   });
 
+  it('shows a health strip with token/warn counts on a command row, no LLM key required', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+    engine.scan();
+    engine.create('build', ['tdd']);
+    const bridge = createTestBridge(engine);
+
+    renderWithProviders(<CollectionList />, { bridge });
+
+    const row = await screen.findByRole('listitem', { name: 'Command build' });
+    await waitFor(() => expect(within(row).getByLabelText(/warning/)).toBeInTheDocument());
+    // tdd is filed but never read, so 'unused' always fires.
+    expect(within(row).getByLabelText(/1 warning/)).toBeInTheDocument();
+  });
+
+  it('lists health findings in the detail panel with a confirm-gated disable action', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.agents/skills/tdd/SKILL.md', '# tdd\n');
+    fs.writeFile('.claude/skills/tdd/SKILL.md', '# tdd\n');
+    engine.scan();
+    engine.create('build', ['tdd']);
+    const bridge = createTestBridge(engine);
+
+    renderWithProviders(<CollectionList />, { bridge });
+    const detail = await screen.findByRole('region', { name: 'Command build details' });
+
+    await waitFor(() => expect(within(detail).getByText(/unused/)).toBeInTheDocument());
+    expect(within(detail).getByText(/No recorded reads/)).toBeInTheDocument();
+
+    await userEvent.click(within(detail).getByRole('button', { name: 'Disable' }));
+    expect(await screen.findByRole('dialog', { name: 'Disable tdd?' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Disable skill' }));
+
+    await waitFor(() => expect(engine.skills().find((skill) => skill.id === 'tdd')?.paths).toEqual(['.skil/parked/skills/tdd']));
+  });
+
+  it('cancels a finding action without mutating the map', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+    engine.scan();
+    engine.create('build', ['tdd']);
+    const bridge = createTestBridge(engine);
+
+    renderWithProviders(<CollectionList />, { bridge });
+    const detail = await screen.findByRole('region', { name: 'Command build details' });
+    await userEvent.click(await within(detail).findByRole('button', { name: 'Remove' }));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(engine.list()[0]?.skills).toEqual(['tdd']);
+  });
+
   it('shows a name-collision error and does not toggle on when a non-command skill already owns that live path', async () => {
     const { engine, fs } = createInMemoryWorkspace();
     fs.writeFile('.agents/skills/build/SKILL.md', '# not ours\n');

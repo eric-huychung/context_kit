@@ -40,6 +40,7 @@ const bridge: SkilBridge = {
   setSharedRuleEnabled: (id, enabled) => ipcRenderer.invoke(IPC_CHANNELS.setSharedRuleEnabled, id, enabled),
   listLeftovers: () => ipcRenderer.invoke(IPC_CHANNELS.listLeftovers),
   adoptLeftovers: (ids) => ipcRenderer.invoke(IPC_CHANNELS.adoptLeftovers, ids),
+  health: () => ipcRenderer.invoke(IPC_CHANNELS.health),
 };
 
 contextBridge.exposeInMainWorld('skil', bridge);

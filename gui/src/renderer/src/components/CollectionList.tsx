@@ -5,7 +5,7 @@ import { FOCUS_RING } from '../lib/focus-ring';
 import { conflictLabels, isCommandNameCollision } from '../lib/command-conflicts';
 import { statusLine } from '../../../../../shared/status';
 import { groupCommandsByStage } from '../lib/sdlc';
-import type { Collection } from '../../../shared/ipc';
+import type { Collection, CommandHealth, Finding } from '../../../shared/ipc';
 
 const INBOX_PAGE_SIZE = 10;
 
@@ -52,14 +52,138 @@ function CommandToggle({
   );
 }
 
+/** Doctor's always-available math+regex numbers — no LLM key required. Hidden until `health()` resolves. */
+function HealthStrip({ health }: { health: CommandHealth | undefined }) {
+  if (!health) return null;
+  return (
+    <span
+      className={`health-strip ${health.warnCount > 0 ? 'has-warnings' : ''}`}
+      aria-label={`${health.tokenEstimate} tokens, ${health.warnCount} warning${health.warnCount === 1 ? '' : 's'}`}
+    >
+      {health.tokenEstimate} tok · {health.warnCount} warn
+    </span>
+  );
+}
+
+/**
+ * Findings are read-only report data — the two actions here are the
+ * engine's existing `setSkillEnabled(false)` / `removeSkill`, confirm-gated
+ * so a doctor finding never silently mutates the map.
+ */
+function HealthFindings({
+  commandName,
+  findings,
+  onChange,
+}: {
+  commandName: string;
+  findings: Finding[];
+  onChange: () => void;
+}) {
+  const bridge = useBridge();
+  const [pending, setPending] = useState<{ finding: Finding; action: 'disable' | 'remove' } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (findings.length === 0) {
+    return null;
+  }
+
+  async function handleConfirm() {
+    if (!pending) return;
+    setError(null);
+    const result =
+      pending.action === 'disable'
+        ? await bridge.setSkillEnabled(pending.finding.skillId, false)
+        : await bridge.removeSkillFromCollection(commandName, pending.finding.skillId);
+    if (!result.ok) {
+      setError(statusLine(pending.action === 'disable' ? 'enable' : 'delete'));
+      setPending(null);
+      return;
+    }
+    setPending(null);
+    onChange();
+  }
+
+  return (
+    <div className="active-skills health-findings">
+      <div className="subheading">
+        <span>Health findings</span>
+        <span className="count-pill">{findings.length}</span>
+      </div>
+      {error && (
+        <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      <ul className="finding-list">
+        {findings.map((finding, index) => (
+          <li key={`${finding.type}-${finding.skillId}-${index}`} className="finding-row">
+            <div className="finding-info">
+              <span className="finding-type">{finding.type}</span>
+              <span className="muted-copy">
+                {finding.skillId}: {finding.message}
+              </span>
+            </div>
+            <div className="finding-actions">
+              <button
+                type="button"
+                className={`outline-button ${FOCUS_RING}`}
+                onClick={() => setPending({ finding, action: 'disable' })}
+              >
+                Disable
+              </button>
+              <button
+                type="button"
+                className={`outline-button ${FOCUS_RING}`}
+                onClick={() => setPending({ finding, action: 'remove' })}
+              >
+                Remove
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      {pending && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setPending(null)}>
+          <div
+            className="help-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="finding-confirm-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p className="eyebrow">Health</p>
+            <h2 id="finding-confirm-title">
+              {pending.action === 'disable'
+                ? `Disable ${pending.finding.skillId}?`
+                : `Remove ${pending.finding.skillId} from ${commandName}?`}
+            </h2>
+            <p className="muted-copy">This cannot be undone.</p>
+            <div className="modal-actions">
+              <button type="button" className={`outline-button ${FOCUS_RING}`} onClick={() => setPending(null)}>
+                Cancel
+              </button>
+              <button type="button" className={`primary-button ${FOCUS_RING}`} onClick={() => void handleConfirm()}>
+                {pending.action === 'disable' ? 'Disable skill' : 'Remove skill'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CollectionDetail({
   collection,
   inbox,
+  health,
   onChange,
   onDeleted,
 }: {
   collection: Collection;
   inbox: string[];
+  health: CommandHealth | undefined;
   onChange: () => void;
   onDeleted: () => void;
 }) {
@@ -155,6 +279,7 @@ function CollectionDetail({
           </p>
         </div>
         <div className="detail-actions">
+          <HealthStrip health={health} />
           <CommandToggle collection={collection} busy={toggling} onToggle={() => void handleToggle()} />
           <button
             type="button"
@@ -198,6 +323,8 @@ function CollectionDetail({
           </div>
         ))}
       </div>
+
+      <HealthFindings commandName={collection.name} findings={health?.findings ?? []} onChange={onChange} />
 
       {inbox.length > 0 && (
         <div className="active-skills inbox-picker">
@@ -344,16 +471,22 @@ export default function CollectionList({
   const bridge = useBridge();
   const [collections, setCollections] = useState<Collection[] | null>(null);
   const [inbox, setInbox] = useState<string[]>([]);
+  const [health, setHealth] = useState<Record<string, CommandHealth>>({});
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [togglingName, setTogglingName] = useState<string | null>(null);
   const refreshId = useRef(0);
 
   const refresh = useCallback(async () => {
     const id = ++refreshId.current;
-    const [nextSkills, next] = await Promise.all([bridge.listSkills(), bridge.listCollections()]);
+    const [nextSkills, next, nextHealth] = await Promise.all([
+      bridge.listSkills(),
+      bridge.listCollections(),
+      bridge.health(),
+    ]);
     if (id !== refreshId.current) return;
     setInbox(nextSkills.map((skill) => skill.id));
     setCollections(next);
+    setHealth(nextHealth.ok ? Object.fromEntries(nextHealth.value.map((row) => [row.name, row])) : {});
     setSelectedName((current) => {
       if (current && next.some((collection) => collection.name === current)) return current;
       return next[0]?.name ?? null;
@@ -415,6 +548,7 @@ export default function CollectionList({
                         <span>
                           {collection.skills.length} {collection.skills.length === 1 ? 'skill' : 'skills'}
                         </span>
+                        <HealthStrip health={health[collection.name]} />
                       </div>
                       <CommandToggle
                         collection={collection}
@@ -435,6 +569,7 @@ export default function CollectionList({
           key={selected.name}
           collection={selected}
           inbox={inbox}
+          health={health[selected.name]}
           onChange={refresh}
           onDeleted={refresh}
         />

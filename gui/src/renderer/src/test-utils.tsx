@@ -218,6 +218,7 @@ export function createTestBridge(engine: ICollectionEngine, options: TestBridgeO
       if (result.ok) notifyScan(EMPTY_SCAN);
       return result;
     },
+    health: async () => activeEngine.health(),
   };
 }
 

@@ -77,6 +77,7 @@ export default function InboxPanel() {
   const bridge = useBridge();
   const [catalog, setCatalog] = useState<SkillRecord[] | null>(null);
   const [originById, setOriginById] = useState<Record<string, OriginStatus>>({});
+  const [flaggedIds, setFlaggedIds] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [canScan, setCanScan] = useState(false);
@@ -91,10 +92,17 @@ export default function InboxPanel() {
   const [toggleErrorId, setToggleErrorId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const [nextCatalog, nextChecks] = await Promise.all([bridge.listSkills(), bridge.originChecks()]);
+    const [nextCatalog, nextChecks, nextHealth] = await Promise.all([
+      bridge.listSkills(),
+      bridge.originChecks(),
+      bridge.health(),
+    ]);
     setCatalog(nextCatalog);
     const checks: OriginCheck[] = nextChecks.ok ? nextChecks.value : [];
     setOriginById(Object.fromEntries(checks.map((check) => [check.skillId, check.status])));
+    setFlaggedIds(
+      new Set(nextHealth.ok ? nextHealth.value.flatMap((row) => row.findings.map((finding) => finding.skillId)) : [])
+    );
   }, [bridge]);
 
   useEffect(() => {
@@ -302,6 +310,11 @@ export default function InboxPanel() {
                           <div className="skill-name">{skillId}</div>
                           {originBadge && (
                             <span className={originBadge.className}>{originBadge.label}</span>
+                          )}
+                          {flaggedIds.has(skillId) && (
+                            <span className="finding-badge" aria-label={`${skillId} has a doctor finding`}>
+                              Finding
+                            </span>
                           )}
                         </div>
                         {originById[skillId] === 'update' && (

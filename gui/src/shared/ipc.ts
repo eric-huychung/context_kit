@@ -1,8 +1,8 @@
 import type { Result } from '../../../src/core/result.js';
-import type { AdoptResult, BrowseView, Collection, IDE, LeftoverRecord, OriginCheck, OriginStatus, RuleRecord, ScanResult, Skill, SkillRecord, UsageRow } from '../../../src/types/index.js';
+import type { AdoptResult, BrowseView, Collection, CommandHealth, Finding, HealthReport, IDE, LeftoverRecord, OriginCheck, OriginStatus, RuleRecord, ScanResult, Skill, SkillRecord, UsageRow } from '../../../src/types/index.js';
 import type { MarketSearchRow, ShelfRole } from '../../../src/backend/market-types.js';
 
-export type { AdoptResult, BrowseView, Collection, IDE, LeftoverRecord, MarketSearchRow, OriginCheck, OriginStatus, Result, RuleRecord, ScanResult, ShelfRole, Skill, SkillRecord, UsageRow };
+export type { AdoptResult, BrowseView, Collection, CommandHealth, Finding, HealthReport, IDE, LeftoverRecord, MarketSearchRow, OriginCheck, OriginStatus, Result, RuleRecord, ScanResult, ShelfRole, Skill, SkillRecord, UsageRow };
 
 /**
  * Client-side shape of `GET /api/market/preview`'s `data` — not exported by
@@ -58,6 +58,7 @@ export const IPC_CHANNELS = {
   setSharedRuleEnabled: 'skil:set-shared-rule-enabled',
   listLeftovers: 'skil:list-leftovers',
   adoptLeftovers: 'skil:adopt-leftovers',
+  health: 'skil:health',
 } as const;
 
 /**
@@ -142,4 +143,10 @@ export interface SkilBridge {
   listLeftovers(): Promise<Result<LeftoverRecord[]>>;
   /** "Use ours and remove leftovers": copies missing ids into the live pair, then moves old paths to `.skil/deprecated/`. */
   adoptLeftovers(ids?: string[]): Promise<Result<AdoptResult>>;
+  /**
+   * Doctor pass, math + regex only in this phase (no key required):
+   * one row per command with a token-ish cost, a warn count, and the
+   * findings behind it.
+   */
+  health(): Promise<Result<HealthReport>>;
 }
