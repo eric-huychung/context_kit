@@ -71,6 +71,7 @@ We wrap skills.sh (via skil's OIDC backend) and `npx skills add`. We do not host
 28. As a developer, I want to toggle a shared rule on/off the same way I toggle a skill, so shared law follows the same mental model as everything else
 29. As a developer, I want to click a rule row and preview its body, so I know what the agent will read
 30. As a developer, I want glob rules (`.cursor/rules/*.mdc`, etc.) left exactly where they are, so path-scoped rules are never flattened into `AGENTS.md` by mistake
+31. As a developer, I want a doctor pass (`skil doctor` / the Commands health strip) that flags idle-cost, fat-body, unused, hash-split, and secret findings with no API key required, so I can see what's expensive or risky before I add a key for anything smarter
 
 ## Implementation Decisions
 
@@ -147,6 +148,7 @@ v6 `skills[]` loads as-is; a leftover `inbox` array on disk is ignored, not migr
 - `skil rules` / `rules show <id>` / `rules enable <id>` / `rules disable <id>` — list shared + glob rules, read a body, toggle a shared-law `AGENTS.md` section
 - `skil leftovers` / `skil adopt [ids...]` — list leftover paths, then copy-into-live + move-to-deprecated
 - `skil usage` — print use counts
+- `skil doctor [name]` — findings table (token-ish cost + warn count per command), or one command's findings with a one-line why each; math + regex only, no LLM key required
 - `skil search [query] [--trending]`
 - `skil install <skillId>` — market install straight to the live pair; no `--to`
 
@@ -160,7 +162,7 @@ API origin: `SKIL_API_URL`, then `CONTEXTKIT_API_URL`, then `website.json`.
 
 - Window and brand say skil. Connect folder (Sync tab). No login. Header shows the bound path and Re-scan only after connect.
 - Skills tab (was Inbox): the whole catalog, 25 per page, search, click a row to preview `SKILL.md` (disk body + every path — live/leftover/parked — for catalog ids; market preview for Discover-only ids), toggle per row (`setSkillEnabled`). Groups **Market** (`source: 'skills.sh'`) vs **Project** (`source: 'local'`) — a filter, not two states a skill gets stuck between. Delete is preview-only and hard-deletes live + parked copies (confirm lists the paths). Project rows with a market origin show a **Synced** / **Edited** / **New copy** badge (color + label). **Update** only when the disk copy still matches `originHash` and the live market SKILL.md moved. Edited copies get **Reset to market** (purple) in preview; the confirm stacks above the preview. No auto-sync. No Scan icon; refreshes from `onScan`.
-- Commands tab: **one list**. Create, file from Skills, remove skill, delete command, and a **toggle** per row (`setCommandEnabled`). No dock chips, no Export button, no IDE cards, no per-dock command files — toggling on writes the human-only skill folder into both live trees directly. Filed skills show Claude read counts from `usage()`.
+- Commands tab: **one list**. Create, file from Skills, remove skill, delete command, and a **toggle** per row (`setCommandEnabled`). No dock chips, no Export button, no IDE cards, no per-dock command files — toggling on writes the human-only skill folder into both live trees directly. Filed skills show Claude read counts from `usage()`. Each row and the detail panel show a `health()` strip (token-ish number + warn count, no key required); clicking in shows the findings list, and Disable/Remove on a finding confirm before reusing the existing `setSkillEnabled(false)` / `removeSkill` calls. Skills and Rules rows get a small "Finding" badge when their id is named in any finding.
 - Rules tab: shared-law rows (one `AGENTS.md` section each) get a toggle (`setSharedRuleEnabled`). Glob rows (`.cursor/rules/*.mdc`, etc.) are listed read-only — no toggle, no export. Click a row to preview the body. Does not create rules.
 - Discover: one nest on Landing and GUI — live Top / Trending, then market index role → category, plus search + preview (`MarketDiscover.tsx` / `discover.tsx`). Empty or failed shelves stay on that nest and default to Top. GUI `+` calls `bridge.install(skillId)` directly. No project re-scan control.
 - Discover / Skills / Commands / Rules do not require a folder. Scan needs a connected repo (header Re-scan, Sync pick, or CLI cwd).
@@ -202,7 +204,7 @@ API origin: `SKIL_API_URL`, then `CONTEXTKIT_API_URL`, then `website.json`.
 - Symlink parking (copy + remove is enough)
 - A wishlist Inbox that is not on disk — market `+` is live immediately
 - Treating every `.cursor/rules` glob file as dirty — only leftover always-on files that fight `AGENTS.md` get a warning
-- Token / fat-skill linter (later wedge, not this loop)
+- LLM-powered doctor findings (`conflict`, `vague-trigger`), BYOK, and `suggest()` (later wedge — see `docs/plans/last_phase_architecture.md`). The math+regex doctor (`health()` / `skil doctor` / Commands health strip) already shipped and needs no key.
 - Login, SSO, analytics
 - IDE extensions
 - Global (user-home) skill scan

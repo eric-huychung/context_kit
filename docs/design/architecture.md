@@ -61,8 +61,11 @@ interface SkilEngine {
   browse(view: BrowseView): Promise<Result<Skill[]>>
   rules(): RuleRecord[]
   readRule(id: string): Result<string>
+  health(): Promise<Result<HealthReport>>
 }
 ```
+
+**Doctor (`health()`).** A read-only pass over `commands[].skills` — never a folder walk, never persisted (same as `originChecks()`). One `CommandHealth` row per command: `{ name, tokenEstimate, warnCount, findings[], usedLlm }`. Findings are math + regex only in this phase and never require an API key: **idle-cost** (long filed-skill descriptions, always loaded), **fat-body** (oversized `SKILL.md`), **unused** (`usage()` is 0 for that filed skill), **hash-split** (a catalog id's live/leftover/parked copies disagree on disk), **secret** (vendor-key-shaped regex hit in the body). `conflict` / `vague-trigger` findings (LLM-powered) are a later phase — `usedLlm` stays `false` until then. Pure scoring lives in `src/core/health-checks.ts`, same shallow-helper pattern as `project-rules.ts`; the engine method itself just wires state, `usage()`, and disk reads into it. `skil doctor` and the Commands health strip both call this one method.
 
 **Invariants**
 
@@ -135,6 +138,7 @@ skil add|remove <command> <skillId>           write-through `## Skills` on a liv
 skil enable|disable <command>                 write the command as a human-only skill, or park it
 skil rules | rules show|enable|disable <id>   list, read, toggle a shared-law section
 skil usage                                    use counts (Claude first)
+skil doctor [name]                            findings table, or one command's findings — no key required
 skil search [query] [--trending]              all-time leaderboard when query is omitted
 skil install <skillId>                        market install straight to the live pair
 ```
@@ -149,9 +153,9 @@ Same engine, no business logic in React. Window, brand, and renderer bridge say 
 
 **Tabs**
 
-- **Skills** — the whole catalog, paged and searchable, grouped Market (`source: 'skills.sh'`) vs Project (`source: 'local'`) as a display filter. Toggle per row. Row click opens `SkillPreviewDialog` (catalog ids read `readSkillMd` and list every path; Discover-only ids call `marketPreview`). Market-origin rows show Synced / Edited / New copy; Update appears only when disk still matches `originHash` and the market moved, Reset only in preview. Delete is preview-only. Listens to `onScan`; no Scan control.
-- **Commands** — one list. Create, file from Skills, remove skill, delete command, toggle per row. Filed skills show Claude read counts. No dock chips, no Export.
-- **Rules** — shared-law rows get a toggle; glob rows are read-only. Click to preview. Does not create rules.
+- **Skills** — the whole catalog, paged and searchable, grouped Market (`source: 'skills.sh'`) vs Project (`source: 'local'`) as a display filter. Toggle per row. Row click opens `SkillPreviewDialog` (catalog ids read `readSkillMd` and list every path; Discover-only ids call `marketPreview`). Market-origin rows show Synced / Edited / New copy; Update appears only when disk still matches `originHash` and the market moved, Reset only in preview. Delete is preview-only. A row whose id appears in any `health()` finding shows a small "Finding" badge. Listens to `onScan`; no Scan control.
+- **Commands** — one list. Create, file from Skills, remove skill, delete command, toggle per row. Filed skills show Claude read counts. Each row and the detail panel show a `health()` strip (token-ish number + warn count, no key required); clicking into a command lists its findings, and Disable/Remove on a finding reuse the existing `setSkillEnabled(false)` / `removeSkill` calls behind a confirm dialog. No dock chips, no Export.
+- **Rules** — shared-law rows get a toggle; glob rows are read-only. Click to preview. Does not create rules. Same finding badge as Skills, keyed off `Finding.skillId` matching the rule's id.
 - **Discover** — one nest shared with Landing: live Top / Trending, then market index role → category, plus search and preview. Empty or failed shelves stay on this nest and default to Top. `+` calls `bridge.install(skillId)` — already an on decision.
 - **Sync** — pick / change folder, plus a **Leftovers** card grouped by kind with one action, **Use ours and remove leftovers** (`adoptLeftovers`). Parked items never appear here.
 
@@ -207,6 +211,15 @@ interface ScanResult {
   changed: string[]            // path still there, hash updated
   alwaysOnWarnings: string[]   // leftover always-on rule files that fight AGENTS.md
 }
+
+/** health() view DTO — computed fresh from state + disk + usage() each call, never persisted. */
+interface Finding {
+  type: 'idle-cost' | 'fat-body' | 'unused' | 'hash-split' | 'secret' | 'conflict' | 'vague-trigger'
+  skillId: string
+  message: string               // one-line why, shown as-is in the CLI and GUI
+}
+interface CommandHealth { name: string; tokenEstimate: number; warnCount: number; findings: Finding[]; usedLlm: boolean }
+type HealthReport = CommandHealth[]
 ```
 
 **Id rule:** id = path relative to the skills root, so every copy of the same id is one row with multiple `paths`. Nested `build/tdd/SKILL.md` → `build/tdd`. **Hash** is `SKILL.md` only, not the whole folder — enough for `changed` and `originChecks`. Because on/off is the path list, a stray edit to one tree and not the other is directly visible (both paths present, different hashes) instead of hidden behind a boolean.
@@ -247,7 +260,7 @@ When they apply, read and follow:
 
 ## Test Strategy
 
-**Unit (70%)** — engine with adapters mocked: scan unions live/leftover/parked without writing leftover; one-list add/remove/create/delete; `setSkillEnabled` off→park→on→restore plus market re-fetch; `setCommandEnabled` the same plus the collision error; `setSharedRuleEnabled` upsert/remove on `AGENTS.md`; `leftovers` / `adoptLeftovers`; gone ids; usage counts.
+**Unit (70%)** — engine with adapters mocked: scan unions live/leftover/parked without writing leftover; one-list add/remove/create/delete; `setSkillEnabled` off→park→on→restore plus market re-fetch; `setCommandEnabled` the same plus the collision error; `setSharedRuleEnabled` upsert/remove on `AGENTS.md`; `leftovers` / `adoptLeftovers`; gone ids; usage counts; `health()`'s math+regex findings (pure logic unit-tested in `health-checks.test.ts`, engine wiring in `collection-engine.test.ts`).
 
 **Integration (20%)** — CLI against an in-memory engine; temp-dir FS for walk, hash, and park/deprecate moves; DiskWatch debounce/mute with a fake clock.
 
@@ -273,6 +286,7 @@ When they apply, read and follow:
 8. **Use ours and remove leftovers** copies any missing id into the live pair, moves the old path under `.skil/deprecated/`, and never touches a parked path.
 9. `usage()` counts Claude skill reads from fixtures; missing logs → empty, not a crash.
 10. Rules tab lists every shared-law section (togglable) and every glob file (read-only); `.cursor/rules/*.mdc` is never copied into `AGENTS.md`.
+11. `health()` / `skil doctor` run with zero LLM key and report idle-cost, fat-body, unused, hash-split, and secret findings per command; nothing is persisted.
 
 ## Open Questions
 
@@ -288,7 +302,7 @@ When they apply, read and follow:
 - Symlink parking (copy + remove is enough); live 3-way merge of map + disk + body
 - Stamps on ordinary `SKILL.md` — stamps stay on the command/rule files we generate
 - SQLite, LLM-judge eval, Copilot/Codex usage parsers (leftover scan yes, counts later)
-- `health()` / `suggest()` / BYOK — planned in `docs/plans/last_phase_architecture.md`, fold in after it ships
+- `suggest()` / BYOK / LLM-powered `health()` findings (`conflict`, `vague-trigger`) — planned in `docs/plans/last_phase_architecture.md`, fold in as each phase ships. Phase 1's math+regex `health()` / `skil doctor` already shipped — see "Doctor (`health()`)" above.
 
 ## References
 

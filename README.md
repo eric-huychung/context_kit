@@ -11,6 +11,7 @@ A CLI and desktop GUI for mapping AI skills onto SDLC commands (`/build`, `/tdd`
 - **Scan** = pull. Unions the live pair, every leftover root, and the parked root into one catalog. Hashes `SKILL.md`, reconciles gone/changed/new. Never writes on its own — only `setSkillEnabled` / `setCommandEnabled` / `setSharedRuleEnabled` / `adoptLeftovers` write.
 - **Install** = pulls a market skill straight into the live pair (`.agents/skills/<id>` + `.claude/skills/<id>`). No staging step.
 - **Usage** = how often catalog skills were read (Claude logs first). Counts only — not "used properly."
+- **Doctor** = `health()` / `skil doctor`. A read-only report per command: idle-cost, fat-body, unused, hash-split, and secret findings. Math + regex only — no API key needed.
 
 Bin is `skil`. `contextkit` is an alias of the same entry.
 
@@ -25,6 +26,7 @@ Bin is `skil`. `contextkit` is an alias of the same entry.
 7. If scan finds paths outside the live pair and parked root, those are leftovers. Adopt them (GUI: Sync tab) to fold them into the live pair and retire the old path — nothing is silently deleted.
 8. `skil rules` lists `AGENTS.md` shared sections and glob rule files. `skil rules enable <id>` / `skil rules disable <id>` toggles a shared section; glob rules refuse toggling.
 9. `skil usage` prints read counts from Claude session logs.
+10. `skil doctor` prints a findings table (token-ish cost + warn count per command); `skil doctor <name>` drills into one command's findings. No API key required.
 
 ## Commands
 
@@ -43,6 +45,7 @@ skil rules show <id>                        # print a rule body
 skil rules enable <id>                      # turn on a shared-law rule (upserts its AGENTS.md section)
 skil rules disable <id>                     # turn off a shared-law rule (removes the section, parks the body)
 skil usage                                  # print Claude read counts
+skil doctor [name]                          # findings table, or one command's findings — no API key required
 skil search [query] [--trending]            # typed search, or all-time / trending leaderboard
 ```
 
