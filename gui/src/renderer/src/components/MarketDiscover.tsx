@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from 'react';
 import { ArrowRight, Check, MagnifyingGlass, Plus } from '@phosphor-icons/react';
 import { useBridge } from '../bridge-context';
 import { FOCUS_RING } from '../lib/focus-ring';
@@ -16,12 +16,36 @@ const BROWSE_TABS: Array<{ view: BrowseView; label: string }> = [
   { view: 'trending', label: 'Trending' },
 ];
 
+/** Suggestion tab's own three-state gate (per `docs/plans/last_phase_architecture.md`). Checked fresh each time the tab is selected. */
+type SuggestGate =
+  | { status: 'idle' }
+  | { status: 'no-folder' }
+  | { status: 'no-key' }
+  | { status: 'loading' }
+  | { status: 'error' }
+  | { status: 'ready'; rows: Row[] };
+
+/** Flattens shelves into an id -> row lookup so suggested ids (engine returns ids only) get a name/installs to display. */
+function shelfRowsById(shelves: ShelfRole[]): Map<string, Row> {
+  const byId = new Map<string, Row>();
+  for (const role of shelves) {
+    for (const field of role.fields) {
+      for (const skill of field.skills) {
+        if (!byId.has(skill.id)) {
+          byId.set(skill.id, { id: skill.id, name: skill.name, installs: skill.installs });
+        }
+      }
+    }
+  }
+  return byId;
+}
+
 /**
  * Role -> category -> ranked skills from the market index, plus live
  * Top / Trending. Empty or failed shelves keep this same nest and default
  * to Top — no second Discover UI.
  */
-export default function MarketDiscover() {
+export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: () => void } = {}) {
   const bridge = useBridge();
   const [shelves, setShelves] = useState<ShelfRole[] | null>(null);
   const [activeRole, setActiveRole] = useState<string | null>(null);
@@ -38,6 +62,9 @@ export default function MarketDiscover() {
   const [addingId, setAddingId] = useState<string | null>(null);
   const [addStates, setAddStates] = useState<Record<string, AddState>>({});
   const browseCache = useRef<Partial<Record<BrowseView, Row[]>>>({});
+  const [suggestedActive, setSuggestedActive] = useState(false);
+  const [suggestGate, setSuggestGate] = useState<SuggestGate>({ status: 'idle' });
+  const suggestCheckedFor = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,10 +135,63 @@ export default function MarketDiscover() {
   }
 
   function handleRoleSelect(r: ShelfRole) {
+    setSuggestedActive(false);
     setBrowseView(null);
     setBrowseError(null);
     setActiveRole(r.slug);
     setActiveField(r.fields[0]?.slug ?? null);
+  }
+
+  /**
+   * Suggestion tab's own fetch: `getProjectRoot` -> `hasLlmKey` -> (only
+   * then) `marketShelves` + `suggest`, so no folder or no key never
+   * triggers a market/LLM call. Caches by root+key so switching tabs and
+   * back does not refetch unless one of those actually changed.
+   */
+  const runSuggestCheck = useCallback(async () => {
+    const root = await bridge.getProjectRoot();
+    if (!root) {
+      suggestCheckedFor.current = null;
+      setSuggestGate({ status: 'no-folder' });
+      return;
+    }
+    const key = await bridge.hasLlmKey();
+    if (!key) {
+      suggestCheckedFor.current = null;
+      setSuggestGate({ status: 'no-key' });
+      return;
+    }
+    const cacheKey = `${root}::${key}`;
+    if (suggestCheckedFor.current === cacheKey) {
+      return;
+    }
+    setSuggestGate({ status: 'loading' });
+    const shelvesResult = await bridge.marketShelves();
+    if (!shelvesResult.ok) {
+      setSuggestGate({ status: 'error' });
+      return;
+    }
+    const result = await bridge.suggest(shelvesResult.value);
+    if (!result.ok) {
+      setSuggestGate({ status: 'error' });
+      return;
+    }
+    const byId = shelfRowsById(shelvesResult.value);
+    const rows = result.value.ids.map((id) => byId.get(id) ?? { id, name: id, installs: 0 });
+    suggestCheckedFor.current = cacheKey;
+    setSuggestGate({ status: 'ready', rows });
+  }, [bridge]);
+
+  function handleSelectSuggested() {
+    setBrowseView(null);
+    setBrowseError(null);
+    setSuggestedActive(true);
+    void runSuggestCheck();
+  }
+
+  async function handlePickForSuggest() {
+    const picked = await bridge.pickProjectFolder();
+    if (picked) void runSuggestCheck();
   }
 
   async function runMarketSearch(trimmed: string) {
@@ -139,6 +219,7 @@ export default function MarketDiscover() {
 
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSuggestedActive(false);
     await runMarketSearch(query.trim());
   }
 
@@ -162,6 +243,49 @@ export default function MarketDiscover() {
 
   const catalogError = searchError ?? (browseView ? browseError : null);
   const showSkeleton = shelves === null || isSearching || isBrowsing;
+
+  function renderSkillRow(skill: Row, index: number) {
+    const addState = addStates[skill.id];
+    const isAdding = addingId === skill.id;
+    const added = !isAdding && addState?.status === 'success';
+    return (
+      <li className="library-skill library-skill-interactive" key={skill.id} onClick={() => setSelectedId(skill.id)}>
+        <button
+          type="button"
+          className={`library-skill-hit ${FOCUS_RING}`}
+          onClick={() => setSelectedId(skill.id)}
+          aria-haspopup="dialog"
+          aria-label={`Details for ${skill.name}`}
+        />
+        <span className="skill-rank">{skill.rank ?? index + 1}</span>
+        <div className="skill-info">
+          <div className="skill-name">{skill.name}</div>
+        </div>
+        <div className="skill-actions">
+          {!isAdding && addState?.status === 'error' && <StatusNotice kind="add" layout="inline" />}
+          <span className="skill-installs">{formatInstalls(skill.installs)}</span>
+          <button
+            type="button"
+            onClick={(event: MouseEvent<HTMLButtonElement>) => {
+              event.stopPropagation();
+              void handleAdd(skill.id);
+            }}
+            disabled={isAdding}
+            aria-label={isAdding ? `Adding ${skill.id}` : added ? `Added ${skill.id}` : `Add ${skill.id}`}
+            aria-pressed={added}
+            aria-busy={isAdding || undefined}
+            className={`add-icon-button ${FOCUS_RING}`}
+          >
+            {added ? (
+              <Check size={16} weight="regular" aria-hidden="true" />
+            ) : (
+              <Plus size={16} weight="regular" aria-hidden="true" />
+            )}
+          </button>
+        </div>
+      </li>
+    );
+  }
 
   return (
     <section className="library-panel panel-section">
@@ -200,28 +324,40 @@ export default function MarketDiscover() {
                 key={tab.view}
                 type="button"
                 role="tab"
-                aria-selected={browseView === tab.view}
-                onClick={() => void loadBrowse(tab.view)}
-                className={`filter ${browseView === tab.view ? 'active-filter' : ''} ${FOCUS_RING}`}
+                aria-selected={!suggestedActive && browseView === tab.view}
+                onClick={() => {
+                  setSuggestedActive(false);
+                  void loadBrowse(tab.view);
+                }}
+                className={`filter ${!suggestedActive && browseView === tab.view ? 'active-filter' : ''} ${FOCUS_RING}`}
               >
                 {tab.label}
               </button>
             ))}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={suggestedActive}
+              onClick={handleSelectSuggested}
+              className={`filter ${suggestedActive ? 'active-filter' : ''} ${FOCUS_RING}`}
+            >
+              Suggested
+            </button>
             {shelves.map((r) => (
               <button
                 key={r.slug}
                 type="button"
                 role="tab"
-                aria-selected={browseView === null && r.slug === activeRole}
+                aria-selected={!suggestedActive && browseView === null && r.slug === activeRole}
                 onClick={() => handleRoleSelect(r)}
-                className={`filter ${browseView === null && r.slug === activeRole ? 'active-filter' : ''} ${FOCUS_RING}`}
+                className={`filter ${!suggestedActive && browseView === null && r.slug === activeRole ? 'active-filter' : ''} ${FOCUS_RING}`}
               >
                 {r.label}
               </button>
             ))}
           </div>
 
-          {role && browseView === null && (
+          {role && browseView === null && !suggestedActive && (
             <div role="tablist" aria-label="Category" className="filter-row">
               {role.fields.map((f) => (
                 <button
@@ -240,58 +376,47 @@ export default function MarketDiscover() {
         </>
       )}
 
-      {showSkeleton && <StatusSkeleton />}
-      {catalogError && !showSkeleton && <StatusNotice kind={catalogError} onRetry={retryFailedCatalog} />}
-
-      {shelves && !showSkeleton && !catalogError && (
-        <ul className="skill-list">
-          {rows.map((skill, index) => {
-            const addState = addStates[skill.id];
-            const isAdding = addingId === skill.id;
-            const added = !isAdding && addState?.status === 'success';
-            return (
-              <li
-                className="library-skill library-skill-interactive"
-                key={skill.id}
-                onClick={() => setSelectedId(skill.id)}
-              >
-                <button
-                  type="button"
-                  className={`library-skill-hit ${FOCUS_RING}`}
-                  onClick={() => setSelectedId(skill.id)}
-                  aria-haspopup="dialog"
-                  aria-label={`Details for ${skill.name}`}
-                />
-                <span className="skill-rank">{skill.rank ?? index + 1}</span>
-                <div className="skill-info">
-                  <div className="skill-name">{skill.name}</div>
-                </div>
-                <div className="skill-actions">
-                  {!isAdding && addState?.status === 'error' && <StatusNotice kind="add" layout="inline" />}
-                  <span className="skill-installs">{formatInstalls(skill.installs)}</span>
-                  <button
-                    type="button"
-                    onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                      event.stopPropagation();
-                      void handleAdd(skill.id);
-                    }}
-                    disabled={isAdding}
-                    aria-label={isAdding ? `Adding ${skill.id}` : added ? `Added ${skill.id}` : `Add ${skill.id}`}
-                    aria-pressed={added}
-                    aria-busy={isAdding || undefined}
-                    className={`add-icon-button ${FOCUS_RING}`}
-                  >
-                    {added ? (
-                      <Check size={16} weight="regular" aria-hidden="true" />
-                    ) : (
-                      <Plus size={16} weight="regular" aria-hidden="true" />
-                    )}
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+      {suggestedActive ? (
+        <>
+          {suggestGate.status === 'no-folder' && (
+            <div className="glass-panel status-notice" role="status">
+              <p className="eyebrow">Suggested</p>
+              <h2>Connect a project folder</h2>
+              <p className="muted-copy">
+                Suggestions are ranked against this project&apos;s package.json — connect a folder on Sync first.
+              </p>
+              <button type="button" className={`primary-button ${FOCUS_RING}`} onClick={() => void handlePickForSuggest()}>
+                Pick a folder
+              </button>
+            </div>
+          )}
+          {suggestGate.status === 'no-key' && (
+            <div className="glass-panel status-notice" role="status">
+              <p className="eyebrow">Suggested</p>
+              <h2>No LLM key saved</h2>
+              <p className="muted-copy">
+                Suggestions need your own LLM key to rank market skills against this project&apos;s stack.
+              </p>
+              <button type="button" className={`primary-button ${FOCUS_RING}`} onClick={() => onOpenSettings?.()}>
+                Open Settings
+              </button>
+            </div>
+          )}
+          {suggestGate.status === 'loading' && <StatusSkeleton />}
+          {suggestGate.status === 'error' && <StatusNotice kind="load" onRetry={() => void runSuggestCheck()} />}
+          {suggestGate.status === 'ready' && suggestGate.rows.length === 0 && (
+            <p className="muted-copy">No suggestions right now — nothing on the market index matched this project.</p>
+          )}
+          {suggestGate.status === 'ready' && suggestGate.rows.length > 0 && (
+            <ul className="skill-list">{suggestGate.rows.map(renderSkillRow)}</ul>
+          )}
+        </>
+      ) : (
+        <>
+          {showSkeleton && <StatusSkeleton />}
+          {catalogError && !showSkeleton && <StatusNotice kind={catalogError} onRetry={retryFailedCatalog} />}
+          {shelves && !showSkeleton && !catalogError && <ul className="skill-list">{rows.map(renderSkillRow)}</ul>}
+        </>
       )}
 
       {selectedId && <SkillPreviewDialog id={selectedId} source="market" onClose={() => setSelectedId(null)} />}
