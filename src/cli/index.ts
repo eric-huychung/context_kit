@@ -2,11 +2,12 @@
 import { createEngine } from '../create-engine.js';
 import { createDiscover } from '../backend/discover.js';
 import { getApiBaseUrl } from '../config/website.js';
+import { llmChatFromEnv } from '../llm/env-llm-settings.js';
 import { createProgram } from './program.js';
 
 function startEngine() {
   try {
-    return createEngine();
+    return createEngine(process.cwd(), llmChatFromEnv());
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exit(1);
