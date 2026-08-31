@@ -5,7 +5,9 @@ import type {
   AdoptResult,
   BrowseView,
   Collection,
+  CommandHealth,
   CommandRecord,
+  HealthReport,
   LeftoverRecord,
   OriginCheck,
   RuleRecord,
@@ -25,6 +27,7 @@ import {
   removeRuleSection,
   upsertRuleSection,
 } from './project-rules.js';
+import { computeSkillFindings, estimateTokens, parseDescription } from './health-checks.js';
 import {
   COMMAND_DIR_BY_IDE,
   COMMAND_EXTENSION_BY_IDE,
@@ -215,6 +218,55 @@ export class CollectionEngine implements ICollectionEngine {
       .map(([skillId, count]) => ({ skillId, count }))
       .sort((a, b) => b.count - a.count || a.skillId.localeCompare(b.skillId));
     return ok(rows);
+  }
+
+  /** Reads every path currently on disk for a catalog id and hashes it fresh — never trusts the persisted single `hash` field, since that only reflects one of possibly several paths. */
+  private hashesForPaths(paths: string[]): Set<string> {
+    const hashes = new Set<string>();
+    for (const path of paths) {
+      const contents = this.fs.readFile(`${path}/SKILL.md`);
+      if (isOk(contents)) {
+        hashes.add(createHash('sha256').update(contents.value, 'utf8').digest('hex'));
+      }
+    }
+    return hashes;
+  }
+
+  async health(): Promise<Result<HealthReport>> {
+    const usageResult = await this.usage();
+    const usageCounts = new Map<string, number>();
+    if (isOk(usageResult)) {
+      for (const row of usageResult.value) {
+        usageCounts.set(row.skillId, row.count);
+      }
+    }
+
+    const report: CommandHealth[] = this.state.commands.map((command) => {
+      const findings = [];
+      let tokenEstimate = 0;
+
+      for (const skillId of command.skills) {
+        const record = this.state.skills.find((skill) => skill.id === skillId);
+        const bodyResult = this.readSkillMd(skillId);
+        const body = isOk(bodyResult) ? bodyResult.value : '';
+        const description = parseDescription(body);
+        tokenEstimate += estimateTokens(description || skillId);
+
+        findings.push(
+          ...computeSkillFindings({
+            skillId,
+            description,
+            body,
+            usageCount: usageCounts.get(skillId) ?? 0,
+            diskHashes: record ? this.hashesForPaths(record.paths) : new Set<string>(),
+          })
+        );
+      }
+
+      return { name: command.name, tokenEstimate, warnCount: findings.length, findings, usedLlm: false };
+    });
+
+    return ok(report);
   }
 
   create(name: string, skillIds: string[]): Result<Collection> {

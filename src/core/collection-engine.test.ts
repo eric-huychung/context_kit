@@ -1482,6 +1482,72 @@ describe('CollectionEngine', () => {
     });
   });
 
+  describe('health', () => {
+    it('reports zero warnings for a command with no filed skills', async () => {
+      engine.create('empty', []);
+
+      const result = await engine.health();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value).toEqual([
+          { name: 'empty', tokenEstimate: expect.any(Number), warnCount: 0, findings: [], usedLlm: false },
+        ]);
+      }
+    });
+
+    it('never crashes and needs no LLM key: idle-cost, fat-body, unused, hash-split, secret all populate', async () => {
+      const longDescription = 'x'.repeat(500);
+      const body = (marker: string) =>
+        `---\nname: tdd\ndescription: ${longDescription}\n---\n${Array.from({ length: 400 }, () => 'line').join('\n')}\nkey: sk-abcdefghijklmnopqrstuvwx\n${marker}\n`;
+      // Both live copies carry the full fat/secret/idle-cost content (so readSkillMd's
+      // "first readable path" pick doesn't matter) but differ by one trailing marker,
+      // so they hash differently and hash-split still fires.
+      fs.writeFile('.agents/skills/tdd/SKILL.md', body('agents-copy'));
+      fs.writeFile('.claude/skills/tdd/SKILL.md', body('claude-copy'));
+      engine.scan();
+      engine.create('build', ['tdd']);
+
+      const result = await engine.health();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        const build = result.value.find((row) => row.name === 'build');
+        expect(build?.usedLlm).toBe(false);
+        const types = build?.findings.map((f) => f.type).sort();
+        expect(types).toEqual(['fat-body', 'hash-split', 'idle-cost', 'secret', 'unused']);
+      }
+    });
+
+    it('flags unused as false once usage() reports a read', async () => {
+      const usage = new InMemoryUsageCollector();
+      usage.seed([{ skillId: 'tdd', source: 'claude' }]);
+      engine = new CollectionEngine(fs, skills, usage);
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      engine.scan();
+      engine.create('build', ['tdd']);
+
+      const result = await engine.health();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        const build = result.value.find((row) => row.name === 'build');
+        expect(build?.findings.some((f) => f.type === 'unused')).toBe(false);
+      }
+    });
+
+    it('persists nothing to state.json', async () => {
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      engine.scan();
+      engine.create('build', ['tdd']);
+      const before = fs.readJSON(STATE_PATH);
+
+      await engine.health();
+
+      expect(fs.readJSON(STATE_PATH)).toEqual(before);
+    });
+  });
+
   describe('rules', () => {
     it('lists AGENTS.md shared-law sections and path-scoped glob rule files, and scan does not touch either', () => {
       fs.writeFile(

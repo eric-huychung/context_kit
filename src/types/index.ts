@@ -138,6 +138,33 @@ export interface AdoptResult {
   deprecated: string[];
 }
 
+/**
+ * One `health()` warning about a filed skill. Math/regex types
+ * (`idle-cost`, `fat-body`, `unused`, `hash-split`, `secret`) never
+ * require an LLM key. `conflict` / `vague-trigger` are Phase 2, added
+ * only when an `LlmChat` is injected.
+ */
+export interface Finding {
+  type: 'idle-cost' | 'fat-body' | 'unused' | 'hash-split' | 'secret' | 'conflict' | 'vague-trigger';
+  skillId: string;
+  /** One-line human-readable why, shown as-is in the CLI and GUI. */
+  message: string;
+}
+
+/** `health()`'s per-command row. */
+export interface CommandHealth {
+  name: string;
+  /** Rough char/4 estimate of the always-loaded cost (filed skills' descriptions). Not a billing number. */
+  tokenEstimate: number;
+  warnCount: number;
+  findings: Finding[];
+  /** True once an LLM call actually ran for this command (Phase 2). Phase 1 is always `false`. */
+  usedLlm: boolean;
+}
+
+/** `health()`'s return shape: one row per command on the project map. */
+export type HealthReport = CommandHealth[];
+
 /** Outcome of `scan()` — pull. */
 export interface ScanResult {
   added: string[];

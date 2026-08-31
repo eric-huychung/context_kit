@@ -3,6 +3,7 @@ import type {
   AdoptResult,
   BrowseView,
   Collection,
+  HealthReport,
   LeftoverRecord,
   OriginCheck,
   RuleRecord,
@@ -214,4 +215,15 @@ export interface ICollectionEngine {
    * again. Never touches a parked path.
    */
   adoptLeftovers(ids?: string[]): Promise<Result<AdoptResult>>;
+
+  /**
+   * Doctor pass over `commands[].skills` — never a folder walk. Math +
+   * regex findings (idle-cost, fat-body, unused, hash-split, secret)
+   * always populate, no LLM key required. Conflict / vague-trigger
+   * findings only appear once an `LlmChat` is injected (Phase 2); until
+   * then `usedLlm` is `false` and this method's output never changes
+   * shape based on a key. Read-only: persists nothing, same as
+   * `originChecks()`.
+   */
+  health(): Promise<Result<HealthReport>>;
 }
