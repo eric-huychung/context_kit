@@ -16,8 +16,9 @@ function readLandingSources(): string {
   const files = readdirSync(landingDir)
     .filter((name) => name.endsWith('.tsx'))
     .map((name) => readFileSync(join(landingDir, name), 'utf-8'));
+  const routePages = ['app/page.tsx', 'app/leaderboard/page.tsx', 'app/cli/page.tsx', 'app/app/page.tsx'];
   return [
-    readWeb('app/page.tsx'),
+    ...routePages.map((path) => readWeb(path)),
     readWeb('app/layout.tsx'),
     readWeb('next.config.mjs'),
     ...files,
@@ -34,22 +35,24 @@ describe('landing page', () => {
     expect(page).toContain("from '@/components/landing/hero'");
     expect(landing).toContain('Give your agent skills a');
     expect(landing).toContain('id="how-it-works"');
-    expect(landing).toContain('id="preview"');
+    expect(landing).toContain('skil — desktop app');
     expect(landing).toContain('id="features"');
     expect(landing).toContain('id="cli"');
     expect(landing).toContain('id="download"');
     expect(landing).not.toContain('There is no web app here');
     expect(landing).not.toContain('ContextKit API');
-    expect(existsSync(join(webDir, 'app/app'))).toBe(false);
+    expect(existsSync(join(webDir, 'app/app/page.tsx'))).toBe(true);
     expect(existsSync(join(webDir, 'components/product'))).toBe(false);
   });
 
-  it('does not route Open app or Download into a product app', () => {
+  it('routes marketing pages separately from a logged-in product app', () => {
     const landing = readLandingSources();
-    expect(landing).not.toMatch(/href=["']\/app["']/);
+    expect(landing).toContain("href: '/leaderboard'");
+    expect(landing).toContain("href: '/cli'");
+    expect(landing).toContain("href: '/app'");
     expect(landing).toContain('Download for Mac');
-    expect(landing).toContain('Open app');
     expect(landing).toContain('github.com/eric-huychung/skil');
+    expect(existsSync(join(webDir, 'components/product'))).toBe(false);
   });
 
   it('shows a wordmark and beta in the header, not the logo chip', () => {
@@ -61,15 +64,25 @@ describe('landing page', () => {
     expect(header).not.toContain("from '@/components/brand/logo'");
   });
 
-  it('shows the same product sections as the ui-example landing', () => {
+  it('keeps the home page focused on product story sections', () => {
+    const home = readWeb('app/page.tsx');
+    expect(home).toContain("from '@/components/landing/hero'");
+    expect(home).toContain("from '@/components/landing/how-it-works'");
+    expect(home).toContain("from '@/components/landing/supported-tools'");
+    expect(home).toContain("from '@/components/landing/feature-grid'");
+    expect(home).not.toContain("from '@/components/landing/discover'");
+    expect(home).not.toContain("from '@/components/landing/cli-install'");
+  });
+
+  it('shows product sections across the marketing routes', () => {
     const landing = readLandingSources();
     expect(landing).toContain('Works with the agents you already use');
     expect(landing).toContain('.cursor');
     expect(landing).toContain('.claude');
-    expect(landing).toContain('.windsurf');
+    expect(landing).toContain('.codex');
     expect(landing).toContain('.agents');
     expect(landing).toContain('Connect a repo');
-    expect(landing).toContain('No login required');
+    expect(landing).toContain('No login');
     expect(landing).toContain('Prefer the terminal?');
     expect(landing).toContain('skil scan');
     expect(landing).toContain('Apple Silicon');

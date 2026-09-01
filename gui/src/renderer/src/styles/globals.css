@@ -290,13 +290,15 @@
 .workspace-search .library-panel,
 .workspace-config .config-panel,
 .workspace-inbox .inbox-panel,
-.workspace-rules .rules-panel {
+.workspace-rules .rules-panel,
+.workspace-settings .settings-panel {
   min-height: 0;
   border-right: 0;
   overflow-y: auto;
 }
 
-.workspace-config .config-panel {
+.workspace-config .config-panel,
+.workspace-settings .settings-panel {
   width: 100%;
   max-width: 56rem;
   margin-inline: auto;
@@ -304,7 +306,8 @@
 }
 
 @media (min-width: 640px) {
-  .workspace-config .config-panel {
+  .workspace-config .config-panel,
+  .workspace-settings .settings-panel {
     padding: 2.5rem 2.5rem;
   }
 }
@@ -1398,7 +1401,8 @@ button.always-on-toggle.on:hover {
 
 .config-panel,
 .inbox-panel,
-.rules-panel {
+.rules-panel,
+.settings-panel {
   grid-column: 2 / -1;
 }
 

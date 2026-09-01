@@ -1,29 +1,26 @@
-import { FolderGit2, ScanSearch, LayoutGrid, UploadCloud } from 'lucide-react'
+import { Search, FolderKanban, Stethoscope } from 'lucide-react'
 
 const steps = [
   {
-    icon: FolderGit2,
-    title: 'Connect a repo',
+    icon: Search,
+    tag: 'Discovery',
+    problem: 'Too many skills to pick from.',
     description:
-      'Point Skil at a local project folder. No account, no OAuth, nothing to sign into.',
+      "Browse skills.sh's leaderboard (Top or Trending), or search by name — no API key. Run `skil suggest` for picks matched to this project's package.json.",
   },
   {
-    icon: ScanSearch,
-    title: 'Scan',
+    icon: FolderKanban,
+    tag: 'Management',
+    problem: 'Skills pile up, scattered across tools.',
     description:
-      'It reads .cursor, .claude, .windsurf, and .agents and lists every skill and slash command it finds.',
+      'One scan reads .cursor, .claude, .codex, and .agents into a single catalog. File skills onto SDLC commands like /build, then toggle on — it writes .agents + .claude at once. Toggle off parks it; nothing is deleted.',
   },
   {
-    icon: LayoutGrid,
-    title: 'Organize',
+    icon: Stethoscope,
+    tag: 'Evaluation',
+    problem: 'No idea which skills still earn their spot.',
     description:
-      'Group commands under the SDLC stages you use — planning, build, testing, review — and file skills underneath.',
-  },
-  {
-    icon: UploadCloud,
-    title: 'Export',
-    description:
-      'Write the organized set back to the repo. Additive by default, with a warning before anything is overwritten.',
+      '`skil doctor` flags idle-cost, fat bodies, conflicts, and dead skills — no LLM key required. Usage counts show what actually gets read.',
   },
 ]
 
@@ -33,7 +30,7 @@ export function HowItWorks() {
       <div className="mx-auto max-w-6xl">
         <div className="max-w-2xl">
           <h2 className="text-balance font-sans text-3xl font-semibold tracking-tight sm:text-4xl">
-            One flow, from scattered files to a shared playbook
+            Three problems. One map.
           </h2>
           <p className="mt-4 text-pretty text-lg leading-relaxed text-muted-foreground">
             Skil doesn&apos;t invent a new format. It reads what your agents
@@ -41,23 +38,23 @@ export function HowItWorks() {
           </p>
         </div>
 
-        <ol className="mt-14 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {steps.map((step, index) => (
+        <ol className="mt-14 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {steps.map((step) => (
             <li
-              key={step.title}
+              key={step.tag}
               className="glass-panel flex flex-col gap-4 rounded-3xl p-6"
             >
-              <div className="flex items-center justify-between">
-                <span className="flex size-10 items-center justify-center rounded-xl bg-[var(--accent-blue)] text-[var(--accent-blue-foreground)]">
+              <div className="flex items-center gap-3">
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-blue)] text-[var(--accent-blue-foreground)]">
                   <step.icon className="size-5" />
                 </span>
-                <span className="text-sm text-muted-foreground">
-                  {String(index + 1).padStart(2, '0')}
+                <span className="font-mono text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {step.tag}
                 </span>
               </div>
               <div>
                 <h3 className="font-sans text-base font-semibold">
-                  {step.title}
+                  {step.problem}
                 </h3>
                 <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                   {step.description}

@@ -3,7 +3,7 @@
 import * as React from 'react'
 import { Moon, Sun } from 'lucide-react'
 import { useTheme } from 'next-themes'
-import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 export function ThemeToggle({ className }: { className?: string }) {
   const { resolvedTheme, setTheme } = useTheme()
@@ -13,30 +13,26 @@ export function ThemeToggle({ className }: { className?: string }) {
     setMounted(true)
   }, [])
 
-  if (!mounted) {
-    return (
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Toggle theme"
-        className={className}
-      >
-        <Sun className="size-4" />
-      </Button>
-    )
-  }
-
-  const isDark = resolvedTheme === 'dark'
+  const label = mounted
+    ? resolvedTheme === 'dark'
+      ? 'Switch to light theme'
+      : 'Switch to dark theme'
+    : 'Toggle theme'
 
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
-      onClick={() => setTheme(isDark ? 'light' : 'dark')}
-      className={className}
+    <button
+      type="button"
+      aria-label={label}
+      onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+      className={cn('nav-icon-button', className)}
     >
-      {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-    </Button>
+      {!mounted ? (
+        <Sun className="size-4" />
+      ) : resolvedTheme === 'dark' ? (
+        <Sun className="size-4" />
+      ) : (
+        <Moon className="size-4" />
+      )}
+    </button>
   )
 }

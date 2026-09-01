@@ -4,16 +4,18 @@ const lines: { type: 'comment' | 'command' | 'output'; text: string }[] = [
   { type: 'comment', text: '# Install the CLI with Homebrew' },
   { type: 'command', text: 'brew install skil' },
   { type: 'comment', text: '# Scan the current repo for skills' },
-  { type: 'command', text: 'skil scan .' },
+  { type: 'command', text: 'skil scan' },
   { type: 'output', text: '✓ Found 52 skills across 4 sources' },
-  { type: 'comment', text: '# Export a command to your IDE' },
-  { type: 'command', text: 'skil export /build --ide cursor' },
-  { type: 'output', text: '✓ Wrote .cursor/commands/build.md' },
+  { type: 'comment', text: '# Toggle a command on — writes .agents + .claude' },
+  { type: 'command', text: 'skil enable build' },
+  { type: 'comment', text: '# Flag idle-cost, conflicts, and dead skills' },
+  { type: 'command', text: 'skil doctor' },
+  { type: 'output', text: '✓ build: 340 tok · 0 warn' },
 ]
 
 export function CliInstall() {
   return (
-    <section id="cli" className="px-4 py-24 sm:px-6 sm:py-32">
+    <section id="cli" className="px-4 pt-40 pb-24 sm:px-6 sm:pb-32">
       <div className="mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-2">
         <div>
           <div className="glass-panel inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium text-muted-foreground">
@@ -24,15 +26,15 @@ export function CliInstall() {
             Prefer the terminal? There&apos;s a CLI for that
           </h2>
           <p className="mt-4 text-pretty text-lg leading-relaxed text-muted-foreground">
-            The same scan, organize, and export flow, scriptable for CI or a
+            The same scan, toggle, and doctor flow, scriptable for CI or a
             pre-commit hook. Everything the desktop app does, headless.
           </p>
 
           <ul className="mt-6 flex flex-col gap-3 text-sm">
             {[
               'No login or API key — it reads your local repo.',
-              'Additive exports with a diff preview before writing.',
-              'Pin skills per command so CI stays reproducible.',
+              'Toggle is the write. On writes the live pair now; off parks it.',
+              '`skil doctor` catches idle-cost and conflicts before CI does.',
             ].map((item) => (
               <li key={item} className="flex items-start gap-2.5">
                 <span className="mt-2 size-1.5 shrink-0 rounded-full bg-[var(--accent-blue)]" />

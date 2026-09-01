@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowsClockwise, BookOpen, Clock, Compass, Cube, Folder, Lightning, Moon, Question, Sun, Terminal, Trash, X } from '@phosphor-icons/react';
+import { ArrowsClockwise, BookOpen, Clock, Compass, Cube, Folder, Gear, Lightning, Moon, Question, Sun, Terminal, Trash, X } from '@phosphor-icons/react';
 import { useTheme } from './theme';
 import { useBridge } from './bridge-context';
 import { FOCUS_RING } from './lib/focus-ring';
@@ -12,9 +12,9 @@ import CreateCollectionForm from './components/CreateCollectionForm';
 import InboxPanel from './components/InboxPanel';
 import MarketDiscover from './components/MarketDiscover';
 import RulesPanel from './components/RulesPanel';
-import SettingsDialog from './components/SettingsDialog';
+import SettingsPanel from './components/SettingsPanel';
 
-type WorkspaceTab = 'config' | 'search' | 'inbox' | 'collections' | 'rules';
+type WorkspaceTab = 'config' | 'search' | 'inbox' | 'collections' | 'rules' | 'settings';
 
 const TABS: { id: WorkspaceTab; label: string; icon: typeof Folder }[] = [
   { id: 'config', label: 'Sync', icon: ArrowsClockwise },
@@ -22,6 +22,7 @@ const TABS: { id: WorkspaceTab; label: string; icon: typeof Folder }[] = [
   { id: 'inbox', label: 'Skills', icon: Lightning },
   { id: 'collections', label: 'Commands', icon: Terminal },
   { id: 'rules', label: 'Rules', icon: BookOpen },
+  { id: 'settings', label: 'Settings', icon: Gear },
 ];
 
 function ThemeToggle() {
@@ -373,7 +374,6 @@ export default function App() {
   const bridge = useBridge();
   const [tab, setTab] = useState<WorkspaceTab>('collections');
   const [helpOpen, setHelpOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
   const [lastScannedAt, setLastScannedAt] = useState<Date | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -469,7 +469,6 @@ export default function App() {
           </div>
         )}
         <div className="top-actions">
-          <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
           <ThemeToggle />
         </div>
       </header>
@@ -534,7 +533,7 @@ export default function App() {
           />
         )}
 
-        {tab === 'search' && <MarketDiscover onOpenSettings={() => setSettingsOpen(true)} />}
+        {tab === 'search' && <MarketDiscover onOpenSettings={() => setTab('settings')} />}
 
         {tab === 'inbox' && <InboxPanel key={boundRoot ?? 'session'} />}
 
@@ -545,6 +544,8 @@ export default function App() {
         )}
 
         {tab === 'rules' && <RulesPanel key={collectionsVersion} onProjectBound={handleProjectBound} />}
+
+        {tab === 'settings' && <SettingsPanel />}
       </div>
 
       <footer className="footer-bar">

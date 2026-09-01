@@ -5,13 +5,15 @@ type Tool = {
   folder: string
   /** Path to a monochrome SVG used as a CSS mask, or null to use the fallback icon. */
   logo: string | null
+  /** Official brand color, so the mark reads as itself instead of a theme tint. */
+  color: string
 }
 
 const tools: Tool[] = [
-  { name: 'Cursor', folder: '.cursor', logo: '/logos/cursor.svg' },
-  { name: 'Claude Code', folder: '.claude', logo: '/logos/claude.svg' },
-  { name: 'Windsurf', folder: '.windsurf', logo: '/logos/windsurf.svg' },
-  { name: 'Agents', folder: '.agents', logo: null },
+  { name: 'Cursor', folder: '.cursor', logo: '/logos/cursor.svg', color: '#000000' },
+  { name: 'Claude Code', folder: '.claude', logo: '/logos/claude.svg', color: '#D97757' },
+  { name: 'Codex', folder: '.codex', logo: '/logos/openai.svg', color: '#000000' },
+  { name: 'Agents', folder: '.agents', logo: null, color: 'var(--accent-blue)' },
 ]
 
 export function SupportedTools() {
@@ -34,12 +36,17 @@ export function SupportedTools() {
               key={tool.name}
               className="glass-panel flex flex-col items-center gap-3 rounded-3xl px-4 py-8 text-center"
             >
-              <span className="flex size-12 items-center justify-center rounded-2xl bg-[var(--accent-blue)]/10 text-[var(--accent-blue)]">
+              {/* Fixed light chip (not theme-tinted) so a brand mark's real
+                  color — including near-black marks like Cursor/Codex —
+                  stays legible in dark mode instead of vanishing or
+                  inheriting the page's accent tint. */}
+              <span className="flex size-12 items-center justify-center rounded-2xl bg-white">
                 {tool.logo ? (
                   <span
                     aria-hidden="true"
-                    className="size-6 bg-[var(--accent-blue)]"
+                    className="size-6"
                     style={{
+                      backgroundColor: tool.color,
                       maskImage: `url(${tool.logo})`,
                       WebkitMaskImage: `url(${tool.logo})`,
                       maskSize: 'contain',
@@ -51,7 +58,7 @@ export function SupportedTools() {
                     }}
                   />
                 ) : (
-                  <Bot className="size-6" />
+                  <Bot className="size-6" style={{ color: tool.color }} />
                 )}
               </span>
               <div>

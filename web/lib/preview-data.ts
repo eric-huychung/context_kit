@@ -1,4 +1,4 @@
-export type SkillSource = '.cursor' | '.claude' | '.windsurf' | '.agents'
+export type SkillSource = '.cursor' | '.claude' | '.codex' | '.agents'
 
 export type InboxSkill = {
   id: string
@@ -16,7 +16,7 @@ export const inboxSkills: InboxSkill[] = [
   { id: 'agent-browser', name: 'agent-browser', source: '.cursor' },
   { id: 'find-skills', name: 'find-skills', source: '.claude' },
   { id: 'frontend-design', name: 'frontend-design', source: '.cursor' },
-  { id: 'grill-me', name: 'grill-me', source: '.windsurf' },
+  { id: 'grill-me', name: 'grill-me', source: '.codex' },
 ]
 
 export const commands: Command[] = [

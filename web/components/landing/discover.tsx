@@ -153,15 +153,15 @@ export function Discover() {
   const showSkeleton = roles === null || isSearching || isBrowsing
 
   return (
-    <section id="discover" className="px-4 py-24 sm:px-6 sm:py-32">
+    <section id="discover" className="px-4 pt-40 pb-24 sm:px-6 sm:pb-32">
       <div className="mx-auto max-w-6xl">
         <div className="max-w-2xl">
           <h2 className="text-balance font-sans text-3xl font-semibold tracking-tight sm:text-4xl">
-            Browse the skill index
+            The leaderboard
           </h2>
           <p className="mt-4 text-pretty text-lg leading-relaxed text-muted-foreground">
-            Thousands of skills.sh skills, ranked by installs and sorted by
-            role. Find one, then copy the install command.
+            Thousands of skills.sh skills, ranked by installs. Stop guessing
+            which one is good — copy the install command and go.
           </p>
         </div>
 

@@ -1,29 +1,23 @@
-import { ShieldCheck, KeyRound, Layers3, RefreshCcw } from 'lucide-react'
+import { ShieldOff, GitFork, HardDrive } from 'lucide-react'
 
 const features = [
   {
-    icon: KeyRound,
-    title: 'No login required',
+    icon: ShieldOff,
+    title: 'Nothing is ever deleted',
     description:
-      'Point Skil at a folder and start. There is no account to create.',
+      'Toggle off parks a skill or command under .skil/parked — it never deletes. Toggle on restores it.',
   },
   {
-    icon: ShieldCheck,
-    title: 'Additive by default',
+    icon: GitFork,
+    title: 'One list, not five copies',
     description:
-      'Exports add files and warn before overwriting anything you already have.',
+      'No dock picker. One catalog, one command map, mirrored to .agents and .claude at once.',
   },
   {
-    icon: Layers3,
-    title: 'Organized by SDLC stage',
+    icon: HardDrive,
+    title: 'Local-first, always',
     description:
-      'Skills sit under the commands that use them, and commands sit under the stage they belong to.',
-  },
-  {
-    icon: RefreshCcw,
-    title: 'Re-scan anytime',
-    description:
-      'Refresh the view after editing the repo. It is a re-scan, not a live merge — you stay in control.',
+      'State lives in .skil/state.json in your repo. No account, no server sync, nothing to lose.',
   },
 ]
 
@@ -37,11 +31,11 @@ export function FeatureGrid() {
           </h2>
         </div>
 
-        <div className="mt-14 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="mt-14 grid grid-cols-1 gap-4 sm:grid-cols-3">
           {features.map((feature) => (
             <div
               key={feature.title}
-              className="glass-panel flex items-start gap-4 rounded-3xl p-6"
+              className="glass-panel flex flex-col gap-4 rounded-3xl p-6"
             >
               <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-blue)]/12 text-[var(--accent-blue)]">
                 <feature.icon className="size-5" />
