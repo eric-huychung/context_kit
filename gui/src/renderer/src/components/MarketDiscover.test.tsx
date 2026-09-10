@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import MarketDiscover from './MarketDiscover';
 import { createInMemoryEngine, createTestBridge, renderWithProviders } from '../test-utils';
 import { err, ok, type Result } from '../../../../../src/core/result.js';
-import type { MarketPreviewData, MarketSearchRow, ShelfRole, Skill } from '../../../shared/ipc.js';
+import type { MarketPreviewData, MarketSearchRow, ShelfRole, Skill, SuggestResult } from '../../../shared/ipc.js';
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -211,5 +211,143 @@ describe('MarketDiscover', () => {
     const dialog = await screen.findByRole('dialog', { name: 'obra/react-patterns' });
     expect(within(dialog).getByText(/Audit passed/)).toBeInTheDocument();
     expect(within(dialog).getByText(/Use hooks/)).toBeInTheDocument();
+  });
+
+  describe('Suggested tab', () => {
+    it('still loads editorial picks when the market index is unavailable', async () => {
+      const engine = createInMemoryEngine();
+      const suggest = vi.fn(async (): Promise<Result<SuggestResult>> =>
+        ok({ ids: ['obra/react-patterns'], usedLlm: false })
+      );
+      const bridge = {
+        ...createTestBridge(engine),
+        marketShelves: async (): Promise<Result<ShelfRole[]>> => err(new Error('store_error')),
+        suggest,
+      };
+
+      renderWithProviders(<MarketDiscover />, { bridge });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Add obra/react-patterns' })).toBeInTheDocument());
+      expect(suggest).toHaveBeenCalledWith([], 'swe');
+    });
+
+    it('loads editorial picks without a bound folder', async () => {
+      const engine = createInMemoryEngine();
+      const suggest = vi.fn(async (): Promise<Result<SuggestResult>> =>
+        ok({ ids: ['obra/react-patterns'], usedLlm: false })
+      );
+      const bridge = {
+        ...createTestBridge(engine),
+        marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        getProjectRoot: async () => null,
+        hasLlmKey: async () => false,
+        suggest,
+      };
+
+      renderWithProviders(<MarketDiscover />, { bridge });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+
+      await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
+      expect(suggest).toHaveBeenCalledWith(SHELVES, 'swe');
+    });
+
+    it('refetches when the role dropdown changes', async () => {
+      const engine = createInMemoryEngine();
+      const suggest = vi.fn(async (_shelves, role): Promise<Result<SuggestResult>> =>
+        ok({ ids: [`pick-${role}`], usedLlm: false })
+      );
+      const bridge = {
+        ...createTestBridge(engine),
+        marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        suggest,
+      };
+
+      renderWithProviders(<MarketDiscover />, { bridge });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+      await waitFor(() => expect(screen.getByText('pick-swe')).toBeInTheDocument());
+
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Suggested role' }), 'pm');
+      await waitFor(() => expect(screen.getByText('pick-pm')).toBeInTheDocument());
+      expect(suggest).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows the no-key banner with a working Settings link but still lists picks', async () => {
+      const engine = createInMemoryEngine();
+      const onOpenSettings = vi.fn();
+      const bridge = {
+        ...createTestBridge(engine),
+        marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        hasLlmKey: async () => false,
+        suggest: async (): Promise<Result<SuggestResult>> =>
+          ok({ ids: ['obra/react-patterns'], usedLlm: false }),
+      };
+
+      renderWithProviders(<MarketDiscover onOpenSettings={onOpenSettings} />, { bridge });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+
+      await waitFor(() => expect(screen.getByText(/editorial picks only/i)).toBeInTheDocument());
+      expect(screen.getByText('obra/react-patterns')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Open LLM settings' }));
+      expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows a ranked shortlist with a working + when a key is saved', async () => {
+      const engine = createInMemoryEngine();
+      const bridge = {
+        ...createTestBridge(engine),
+        marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        hasLlmKey: async () => true,
+        suggest: async (): Promise<Result<SuggestResult>> =>
+          ok({ ids: ['obra/react-patterns'], usedLlm: true }),
+      };
+
+      renderWithProviders(<MarketDiscover />, { bridge });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+
+      await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
+      expect(screen.queryByText(/editorial picks only/i)).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Add obra/react-patterns' }));
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Added obra/react-patterns' })).toBeInTheDocument()
+      );
+    });
+
+    it('does not refetch when switching away and back with the same role and key state', async () => {
+      const engine = createInMemoryEngine();
+      const suggest = vi.fn(async (): Promise<Result<SuggestResult>> =>
+        ok({ ids: ['obra/react-patterns'], usedLlm: true })
+      );
+      const bridge = {
+        ...createTestBridge(engine),
+        marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        hasLlmKey: async () => true,
+        suggest,
+      };
+
+      renderWithProviders(<MarketDiscover />, { bridge });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+      await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Top' }));
+      await waitFor(() => expect(screen.queryByRole('tab', { name: 'Suggested', selected: true })).not.toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+      await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
+
+      expect(suggest).toHaveBeenCalledTimes(1);
+    });
   });
 });

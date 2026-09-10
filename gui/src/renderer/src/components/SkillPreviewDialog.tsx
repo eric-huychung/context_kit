@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, Copy, GitBranch, Trash, Warning } from '@phosphor-icons/react';
 import ReactMarkdown from 'react-markdown';
@@ -8,6 +8,8 @@ import { FOCUS_RING } from '../lib/focus-ring';
 import { formatInstalls } from '../lib/format-installs';
 import type { MarketPreviewData, OriginStatus } from '../../../shared/ipc';
 import { StatusNotice, StatusSkeleton, type StatusKind } from '../../../../../shared/status';
+import { estimateTokensFromMarkdown, formatTokenCount } from '../lib/skill-health';
+import { HealthBanner, type HealthFindingRow } from './HealthWarning';
 
 /** Strips SKILL.md's YAML frontmatter (`name` / `description`) — the dialog
  * title above already shows the name, and raw frontmatter reads as garbled
@@ -42,6 +44,8 @@ export default function SkillPreviewDialog({
   onReset,
   onDelete,
   lockDismiss = false,
+  findings = [],
+  toggle,
 }: {
   id: string;
   onClose: () => void;
@@ -52,6 +56,8 @@ export default function SkillPreviewDialog({
   /** Delete control lives only here, in preview — never on the list row. */
   onDelete?: () => void;
   lockDismiss?: boolean;
+  findings?: HealthFindingRow[];
+  toggle?: ReactNode;
 }) {
   const bridge = useBridge();
   const [preview, setPreview] = useState<MarketPreviewData | null>(null);
@@ -115,6 +121,7 @@ export default function SkillPreviewDialog({
   const title = preview?.name ?? id;
   const markdown = source === 'local' ? localMd : preview?.skillMd ?? null;
   const loading = !error && (source === 'local' ? localMd === null : preview === null);
+  const tokenEstimate = markdown !== null ? estimateTokensFromMarkdown(markdown, id) : null;
 
   return createPortal(
     <div className="skill-details-backdrop" role="presentation" onClick={lockDismiss ? undefined : onClose}>
@@ -128,18 +135,29 @@ export default function SkillPreviewDialog({
         <button type="button" className={`modal-close ${FOCUS_RING}`} aria-label="Close details" onClick={onClose}>
           <span aria-hidden="true">×</span>
         </button>
-        {onDelete && (
-          <button
-            type="button"
-            aria-label={`Delete ${id}`}
-            className={`delete-card skill-preview-delete ${FOCUS_RING}`}
-            onClick={onDelete}
-          >
-            <Trash size={16} weight="regular" aria-hidden="true" />
-          </button>
-        )}
-        <p className="eyebrow">Skill</p>
-        <h2 id="skill-preview-title">{title}</h2>
+        <div className="skill-preview-head">
+          <div>
+            <p className="eyebrow">Skill</p>
+            <h2 id="skill-preview-title">{title}</h2>
+          </div>
+          <div className="preview-aside">
+            {toggle}
+            <div className="detail-action-row">
+              {tokenEstimate !== null && <p className="health-token">{formatTokenCount(tokenEstimate)}</p>}
+              <HealthBanner name={id} findings={findings} tokenEstimate={tokenEstimate ?? undefined} />
+              {onDelete && (
+                <button
+                  type="button"
+                  aria-label={`Delete ${id}`}
+                  className={`delete-card ${FOCUS_RING}`}
+                  onClick={onDelete}
+                >
+                  <Trash size={16} weight="regular" aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
         {error && <StatusNotice kind={error} onRetry={() => setReloadKey((key) => key + 1)} />}
         {loading && <StatusSkeleton variant="preview" />}
         {preview && (
@@ -165,7 +183,7 @@ export default function SkillPreviewDialog({
         )}
         {originStatus === 'edited' && onReset && (
           <div className="skill-origin-row">
-            <p className="origin-warning text-amber-500">
+            <p className="origin-warning text-destructive">
               <Warning size={16} weight="fill" aria-hidden="true" />
               This no longer matches the market copy.
             </p>

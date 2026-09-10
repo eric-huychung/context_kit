@@ -109,6 +109,18 @@ export function isLiveSkillPath(path: string): boolean {
   return LIVE_SKILL_ROOTS.some((root) => isUnderRoot(path, root));
 }
 
+/** Canonical homes: `.agents/`, `.claude/`, and `AGENTS.md`. Everything else is leftover or drift. */
+export function isCanonicalHomePath(path: string): boolean {
+  const normalized = normalizeDockPath(path);
+  if (normalized === 'AGENTS.md') {
+    return true;
+  }
+  return normalized === '.agents' ||
+    normalized.startsWith('.agents/') ||
+    normalized === '.claude' ||
+    normalized.startsWith('.claude/');
+}
+
 export function isParkedPath(path: string): boolean {
   return isUnderRoot(path, PARKED_ROOT);
 }

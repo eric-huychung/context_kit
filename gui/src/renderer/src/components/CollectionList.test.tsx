@@ -331,6 +331,42 @@ describe('CollectionList', () => {
     expect(within(row).getByRole('button', { name: 'Turn off build' })).toBeInTheDocument();
   });
 
+  it('opens a skill preview when an included skill is clicked', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n\nWrite tests first.\n');
+    fs.writeFile('.claude/skills/tdd/SKILL.md', '# tdd\n\nClaude copy.\n');
+    engine.scan();
+    engine.create('build', ['tdd']);
+    const bridge = createTestBridge(engine);
+
+    renderWithProviders(<CollectionList />, { bridge });
+    const detail = await screen.findByRole('region', { name: 'Command build details' });
+    const included = within(detail).getByText('Included skills').closest('.active-skills');
+    expect(included).not.toBeNull();
+    await userEvent.click(within(included as HTMLElement).getByRole('button', { name: 'Details for tdd' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'tdd' });
+    expect(within(dialog).getByText(/Write tests first/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /Turn (on|off) tdd/ })).toBeInTheDocument();
+    expect(await within(dialog).findByText(/token/)).toBeInTheDocument();
+    expect(within(dialog).queryByText('Unused')).not.toBeInTheDocument();
+    expect(await within(detail).findByLabelText('tdd has a health warning')).toBeInTheDocument();
+  });
+
+  it('opens a skill preview from the From Skills picker', async () => {
+    const engine = createInMemoryEngine();
+    engine.create('frontend', []);
+    await engine.install('obra/react-patterns');
+    const bridge = createTestBridge(engine);
+
+    renderWithProviders(<CollectionList />, { bridge });
+    const detail = await screen.findByRole('region', { name: 'Command frontend details' });
+    await userEvent.click(within(detail).getByRole('button', { name: 'Details for obra/react-patterns' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'obra/react-patterns' });
+    expect(dialog).toBeInTheDocument();
+  });
+
   it('toggles a command off from the detail panel, parking the live pair', async () => {
     const { engine, fs } = createInMemoryWorkspace();
     engine.create('build', ['tdd']);
@@ -346,6 +382,52 @@ describe('CollectionList', () => {
     await waitFor(() => expect(isOk(fs.readFile('.agents/skills/build/SKILL.md'))).toBe(false));
     expect(isOk(fs.readFile('.skil/parked/commands/build/SKILL.md'))).toBe(true);
     expect(within(screen.getByRole('region', { name: 'Command build details' })).getByRole('button', { name: 'Turn on build' })).toBeInTheDocument();
+  });
+
+  it('shows a health mark on a command card; doctor opens from the detail banner', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\nkey: sk-abcdefghijklmnopqrstuvwx\n');
+    engine.scan();
+    engine.create('build', ['tdd']);
+    const bridge = createTestBridge(engine);
+
+    renderWithProviders(<CollectionList />, { bridge });
+
+    const row = await screen.findByRole('listitem', { name: 'Command build' });
+    expect(await within(row).findByLabelText('build has a health warning')).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'build has a health warning' })).not.toBeInTheDocument();
+
+    const detail = await screen.findByRole('region', { name: 'Command build details' });
+    await userEvent.click(await within(detail).findByRole('button', { name: '1 warning' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Health' });
+    expect(within(dialog).getByText('Secret leak')).toBeInTheDocument();
+    expect(within(dialog).getByText(/secret-shaped/i)).toBeInTheDocument();
+  });
+
+  it('ignores a doctor finding without removing the skill from the command', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.agents/skills/tdd/SKILL.md', '# tdd\nkey: sk-abcdefghijklmnopqrstuvwx\n');
+    fs.writeFile('.claude/skills/tdd/SKILL.md', '# tdd\nkey: sk-abcdefghijklmnopqrstuvwx\n');
+    engine.scan();
+    engine.create('build', ['tdd']);
+    const bridge = createTestBridge(engine);
+
+    renderWithProviders(<CollectionList />, { bridge });
+    const row = await screen.findByRole('listitem', { name: 'Command build' });
+    const detail = await screen.findByRole('region', { name: 'Command build details' });
+    await userEvent.click(await within(detail).findByRole('button', { name: '1 warning' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Health' });
+    expect(within(dialog).getByText(/secret-shaped/i)).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Disable' })).not.toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Ignore' }));
+
+    expect(engine.list()[0]?.skills).toEqual(['tdd']);
+    expect(within(detail).getByRole('button', { name: '0 warnings' })).toBeInTheDocument();
+    expect(within(row).queryByLabelText('build has a health warning')).not.toBeInTheDocument();
   });
 
   it('shows a name-collision error and does not toggle on when a non-command skill already owns that live path', async () => {

@@ -11,6 +11,7 @@ const apiEntries = [
   'api/market/shelves.ts',
   'api/market/search.ts',
   'api/market/preview.ts',
+  'api/market/suggested.ts',
   'api/cron/sync-market.ts',
 ].map((file) => resolve(repoRoot, file));
 

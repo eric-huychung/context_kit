@@ -1,14 +1,20 @@
 import type { Result } from '../core/result.js';
+import type { ShelfRole } from '../backend/market-types.js';
 import type {
   AdoptResult,
   BrowseView,
   Collection,
+  DriftAction,
+  HealthReport,
   LeftoverRecord,
   OriginCheck,
   RuleRecord,
   ScanResult,
   Skill,
   SkillRecord,
+  SuggestResult,
+  SyncAudit,
+  SyncPreview,
   UsageRow,
 } from '../types/index.js';
 
@@ -207,6 +213,42 @@ export interface ICollectionEngine {
   leftovers(): Result<LeftoverRecord[]>;
 
   /**
+   * Read-only leftover/drift classification after scan. Paths already in
+   * `.agents/`, `.claude/`, or parked never appear. Three statuses:
+   * needs-import (canonical missing), ready-to-remove (canonical exists,
+   * hashes match), drift (same id, different hash).
+   */
+  auditSync(): Result<SyncAudit>;
+
+  /**
+   * Leftover vs live bodies for a conflict path. Lazy read — two files.
+   * Errors if the path is not a drift leftover.
+   */
+  previewSync(path: string): Result<SyncPreview>;
+
+  /**
+   * Copy/upsert into canonical homes only — never deprecates the source.
+   * Skills/commands → live pair; rules → `AGENTS.md` section. Ids that
+   * are not needs-import are skipped.
+   */
+  importToCanonical(ids: string[]): Promise<Result<AdoptResult>>;
+
+  /**
+   * Deprecate leftover paths that are ready-to-remove (canonical exists,
+   * hashes match). Refuses if any given path is needs-import or drift.
+   * Never touches parked paths.
+   */
+  removeLeftovers(paths: string[]): Promise<Result<AdoptResult>>;
+
+  /**
+   * Resolve a drift row. `keep-live` deprecates the other path (canonical
+   * wins). `import` overwrites canonical from that path, then deprecates
+   * the leftover. Refuses command/skill name collisions. Ignore is leaving
+   * both — no method, row stays.
+   */
+  resolveDrift(id: string, action: DriftAction, path?: string): Promise<Result<AdoptResult>>;
+
+  /**
    * "Use ours and remove leftovers": for each given leftover id (or every
    * leftover if `ids` is omitted), copies it into the live pair if that
    * id is missing there, then moves the old leftover path under
@@ -214,4 +256,25 @@ export interface ICollectionEngine {
    * again. Never touches a parked path.
    */
   adoptLeftovers(ids?: string[]): Promise<Result<AdoptResult>>;
+
+  /**
+   * Doctor pass over `commands[].skills` — never a folder walk. Math +
+   * regex findings (idle-cost, fat-body, unused, hash-split, secret)
+   * always populate, no LLM key required. Unused stays quiet until the
+   * project has at least one recorded read and a 14-day grace has passed.
+   * Conflict / vague-trigger
+   * findings only appear once an `LlmChat` is injected (Phase 2); until
+   * then `usedLlm` is `false` and this method's output never changes
+   * shape based on a key. Read-only: persists nothing, same as
+   * `originChecks()`.
+   */
+  health(): Promise<Result<HealthReport>>;
+
+  /**
+   * Shortlists ~15-20 market ids not already in the catalog. Without a key
+   * returns the editorial picks for `options.role` (default `swe`). With a
+   * key, LLM-reranks role-filtered shelf candidates against `package.json`.
+   * A failed LLM call falls back to fingerprint order, not an error. Read-only.
+   */
+  suggest(shelves: ShelfRole[], options?: { role?: string }): Promise<Result<SuggestResult>>;
 }

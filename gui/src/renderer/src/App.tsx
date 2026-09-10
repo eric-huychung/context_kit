@@ -1,19 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowsClockwise, BookOpen, Clock, Compass, Cube, Folder, Lightning, Moon, Question, Sun, Terminal, Trash, X } from '@phosphor-icons/react';
+import { createPortal } from 'react-dom';
+import { ArrowsClockwise, BookOpen, Clock, Compass, Cube, Folder, Gear, Lightning, Moon, Question, Sun, Terminal, Warning, X } from '@phosphor-icons/react';
 import { useTheme } from './theme';
 import { useBridge } from './bridge-context';
 import { FOCUS_RING } from './lib/focus-ring';
 import { countSkillsBySource, formatScannedAt } from './lib/skill-sources';
 import { statusLine } from '../../../../shared/status';
 import { folderLabel, folderPreview } from '../../shared/recent-folders';
-import type { LeftoverRecord, SkillRecord } from '../../shared/ipc';
+import type { DriftAction, SkillRecord, SyncAudit } from '../../shared/ipc';
 import CollectionList from './components/CollectionList';
 import CreateCollectionForm from './components/CreateCollectionForm';
 import InboxPanel from './components/InboxPanel';
 import MarketDiscover from './components/MarketDiscover';
+import WorkspaceWarning from './components/WorkspaceWarning';
 import RulesPanel from './components/RulesPanel';
+import SettingsPanel from './components/SettingsPanel';
+import SyncCleanupModal, { syncBannerText } from './components/SyncCleanupModal';
 
-type WorkspaceTab = 'config' | 'search' | 'inbox' | 'collections' | 'rules';
+type WorkspaceTab = 'config' | 'search' | 'inbox' | 'collections' | 'rules' | 'settings';
 
 const TABS: { id: WorkspaceTab; label: string; icon: typeof Folder }[] = [
   { id: 'config', label: 'Sync', icon: ArrowsClockwise },
@@ -21,6 +25,7 @@ const TABS: { id: WorkspaceTab; label: string; icon: typeof Folder }[] = [
   { id: 'inbox', label: 'Skills', icon: Lightning },
   { id: 'collections', label: 'Commands', icon: Terminal },
   { id: 'rules', label: 'Rules', icon: BookOpen },
+  { id: 'settings', label: 'Settings', icon: Gear },
 ];
 
 function ThemeToggle() {
@@ -40,12 +45,16 @@ function ThemeToggle() {
 function ConfigPanel({
   root,
   lastScannedAt,
+  audit,
+  onAuditChange,
   onPick,
   onSwitch,
   onDisconnect,
 }: {
   root: string | null;
   lastScannedAt: Date | null;
+  audit: SyncAudit | null;
+  onAuditChange: (audit: SyncAudit | null) => void;
   onPick: () => void;
   onSwitch: (path: string) => void;
   onDisconnect: () => void;
@@ -56,29 +65,60 @@ function ConfigPanel({
   const [recents, setRecents] = useState<string[]>([]);
   const [pendingSwitch, setPendingSwitch] = useState<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
-  const [leftovers, setLeftovers] = useState<LeftoverRecord[]>([]);
-  const [adopting, setAdopting] = useState(false);
-  const [adoptError, setAdoptError] = useState<string | null>(null);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [cleanupError, setCleanupError] = useState<string | null>(null);
 
-  async function refreshLeftovers(): Promise<void> {
+  async function refreshAudit(): Promise<SyncAudit | null> {
     if (!root) {
-      setLeftovers([]);
-      return;
+      onAuditChange(null);
+      return null;
     }
-    const result = await bridge.listLeftovers();
-    if (result.ok) setLeftovers(result.value);
+    const result = await bridge.auditSync();
+    if (!result.ok) {
+      return null;
+    }
+    onAuditChange(result.value);
+    return result.value;
   }
 
-  async function handleAdoptLeftovers(): Promise<void> {
-    setAdopting(true);
-    setAdoptError(null);
-    const result = await bridge.adoptLeftovers();
-    setAdopting(false);
+  async function handleImport(ids: string[]): Promise<void> {
+    setCleanupBusy(true);
+    setCleanupError(null);
+    const result = await bridge.importToCanonical(ids);
+    setCleanupBusy(false);
     if (!result.ok) {
-      setAdoptError(statusLine('adopt'));
+      setCleanupError(statusLine('import'));
       return;
     }
-    await refreshLeftovers();
+    const next = await refreshAudit();
+    if (next && next.rows.length === 0) setCleanupOpen(false);
+  }
+
+  async function handleRemoveLeftovers(paths: string[]): Promise<void> {
+    setCleanupBusy(true);
+    setCleanupError(null);
+    const result = await bridge.removeLeftovers(paths);
+    setCleanupBusy(false);
+    if (!result.ok) {
+      setCleanupError(statusLine('leftover-remove'));
+      return;
+    }
+    const next = await refreshAudit();
+    if (next && next.rows.length === 0) setCleanupOpen(false);
+  }
+
+  async function handleResolveDrift(id: string, action: DriftAction, path: string): Promise<void> {
+    setCleanupBusy(true);
+    setCleanupError(null);
+    const result = await bridge.resolveDrift(id, action, path);
+    setCleanupBusy(false);
+    if (!result.ok) {
+      setCleanupError(statusLine('drift'));
+      return;
+    }
+    const next = await refreshAudit();
+    if (next && next.rows.length === 0) setCleanupOpen(false);
   }
 
   useEffect(() => {
@@ -106,14 +146,8 @@ function ConfigPanel({
   }, [bridge, root]);
 
   useEffect(() => {
-    let cancelled = false;
-    void bridge.listLeftovers().then((result) => {
-      if (!cancelled && result.ok) setLeftovers(result.value);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [bridge, root, lastScannedAt]);
+    if (!audit || audit.rows.length === 0) setCleanupOpen(false);
+  }, [audit]);
 
   const bySource = countSkillsBySource(skills);
   const maxSourceCount = Math.max(...bySource.map((row) => row.count), 1);
@@ -125,6 +159,15 @@ function ConfigPanel({
           <h1>Sync</h1>
           <p className="workspace-lede">Last scan of this folder. Re-scan if nothing on disk changed.</p>
         </div>
+        {connected && audit && audit.rows.length > 0 && (
+          <WorkspaceWarning
+            text={syncBannerText(audit)}
+            onAction={() => {
+              setCleanupError(null);
+              setCleanupOpen(true);
+            }}
+          />
+        )}
       </div>
 
       {recents.length > 0 && (
@@ -253,39 +296,19 @@ function ConfigPanel({
         </div>
       </div>
 
-      {connected && leftovers.length > 0 && (
-        <section className="leftovers-card glass-panel" aria-labelledby="leftovers-title">
-          <div className="section-heading">
-            <div>
-              <h2 id="leftovers-title">Leftovers</h2>
-              <p className="muted-copy">
-                Skill, command, and rule paths outside the two live trees. Not on/not off — just old homes we found.
-              </p>
-            </div>
-            <button
-              type="button"
-              className={`import-button ${FOCUS_RING}`}
-              disabled={adopting}
-              onClick={() => void handleAdoptLeftovers()}
-            >
-              <Trash size={14} weight="regular" aria-hidden="true" />
-              Use ours and remove leftovers
-            </button>
-          </div>
-          {adoptError && (
-            <p role="alert" className="muted-copy text-destructive">
-              {adoptError}
-            </p>
-          )}
-          <ul className="conflict-list" aria-label="Leftover paths">
-            {leftovers.map((row) => (
-              <li key={row.path}>
-                <span className="leftover-kind">{row.kind}</span> {row.path}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {cleanupOpen && audit &&
+        createPortal(
+          <SyncCleanupModal
+            audit={audit}
+            busy={cleanupBusy}
+            error={cleanupError}
+            onClose={() => setCleanupOpen(false)}
+            onImport={(ids) => void handleImport(ids)}
+            onRemove={(paths) => void handleRemoveLeftovers(paths)}
+            onResolveDrift={(id, action, path) => void handleResolveDrift(id, action, path)}
+          />,
+          document.body
+        )}
 
       {pendingSwitch && (
         <div className="modal-backdrop" role="presentation" onClick={() => setPendingSwitch(null)}>
@@ -375,6 +398,7 @@ export default function App() {
   const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
   const [lastScannedAt, setLastScannedAt] = useState<Date | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [syncAudit, setSyncAudit] = useState<SyncAudit | null>(null);
   const rootLoadId = useRef(0);
   // Remounting CollectionList via key refreshes it after a watcher scan
   // or after the engine is rebuilt against a newly picked folder.
@@ -401,6 +425,20 @@ export default function App() {
   }, [bridge]);
 
   const boundRoot = typeof projectRoot === 'string' ? projectRoot : null;
+
+  useEffect(() => {
+    if (!boundRoot) {
+      setSyncAudit(null);
+      return;
+    }
+    let cancelled = false;
+    void bridge.auditSync().then((result) => {
+      if (!cancelled && result.ok) setSyncAudit(result.value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge, boundRoot, lastScannedAt]);
 
   function handleProjectBound(root: string) {
     setProjectRoot(root);
@@ -489,13 +527,18 @@ export default function App() {
                 >
                   <span className="rail-icon">
                     <Icon size={16} weight="regular" aria-hidden="true" />
-                    {item.id === 'config' && (
-                      <span
-                        className={`sync-dot ${boundRoot ? 'connected' : 'disconnected'}`}
-                        title={boundRoot ? 'Folder connected' : 'No folder connected'}
-                        aria-hidden="true"
-                      />
-                    )}
+                    {item.id === 'config' &&
+                      (syncAudit && syncAudit.rows.length > 0 ? (
+                        <span className="sync-warning" title="Leftovers to clean up" aria-hidden="true">
+                          <Warning size={10} weight="fill" />
+                        </span>
+                      ) : (
+                        <span
+                          className={`sync-dot ${boundRoot ? 'connected' : 'disconnected'}`}
+                          title={boundRoot ? 'Folder connected' : 'No folder connected'}
+                          aria-hidden="true"
+                        />
+                      ))}
                   </span>
                   <span className="rail-label" aria-hidden="true">
                     {item.label}
@@ -521,6 +564,8 @@ export default function App() {
           <ConfigPanel
             root={boundRoot}
             lastScannedAt={lastScannedAt}
+            audit={syncAudit}
+            onAuditChange={setSyncAudit}
             onPick={() => void handlePickFolder()}
             onSwitch={(path) => void handleBindFolder(path)}
             onDisconnect={() => {
@@ -531,7 +576,7 @@ export default function App() {
           />
         )}
 
-        {tab === 'search' && <MarketDiscover />}
+        {tab === 'search' && <MarketDiscover onOpenSettings={() => setTab('settings')} />}
 
         {tab === 'inbox' && <InboxPanel key={boundRoot ?? 'session'} />}
 
@@ -542,13 +587,15 @@ export default function App() {
         )}
 
         {tab === 'rules' && <RulesPanel key={collectionsVersion} onProjectBound={handleProjectBound} />}
+
+        {tab === 'settings' && <SettingsPanel />}
       </div>
 
       <footer className="footer-bar">
         <span>
           <span className="live-dot" aria-hidden="true" />
         </span>
-        <span>skil 0.3.0</span>
+        <span>skil 0.5.0</span>
       </footer>
 
       {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}

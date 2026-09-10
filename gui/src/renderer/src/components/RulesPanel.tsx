@@ -6,8 +6,10 @@ import remarkGfm from 'remark-gfm';
 import { useBridge } from '../bridge-context';
 import { FOCUS_RING } from '../lib/focus-ring';
 import { groupRulesByFolder, ruleFileName } from '../lib/rule-folders';
-import type { RuleRecord } from '../../../shared/ipc';
 import { StatusNotice, StatusSkeleton } from '../../../../../shared/status';
+import { estimateTokensFromMarkdown, findingsForSkill, formatTokenCount } from '../lib/skill-health';
+import type { HealthReport, RuleRecord } from '../../../shared/ipc';
+import { HealthBanner, HealthMark, rowsForSkill, type HealthFindingRow } from './HealthWarning';
 
 function stripFrontmatter(markdown: string): string {
   return markdown.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
@@ -47,7 +49,17 @@ function SharedRuleToggle({
   );
 }
 
-function RulePreviewDialog({ rule, onClose }: { rule: RuleRecord; onClose: () => void }) {
+function RulePreviewDialog({
+  rule,
+  findings,
+  onToggle,
+  onClose,
+}: {
+  rule: RuleRecord;
+  findings: HealthFindingRow[];
+  onToggle: (rule: RuleRecord) => void;
+  onClose: () => void;
+}) {
   const bridge = useBridge();
   const [body, setBody] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -98,11 +110,28 @@ function RulePreviewDialog({ rule, onClose }: { rule: RuleRecord; onClose: () =>
         <button type="button" className={`modal-close ${FOCUS_RING}`} aria-label="Close details" onClick={onClose}>
           <span aria-hidden="true">×</span>
         </button>
-        <p className="eyebrow">Rule</p>
-        <h2 id="rule-preview-title">{rule.name}</h2>
-        <p className="muted-copy">
-          {rule.path} · {rule.kind === 'shared' ? 'Shared law' : 'Path-scoped'}
-        </p>
+        <div className="skill-preview-head">
+          <div>
+            <p className="eyebrow">Rule</p>
+            <h2 id="rule-preview-title">{rule.name}</h2>
+            <p className="muted-copy">
+              {rule.path} · {rule.kind === 'shared' ? 'Shared law' : 'Path-scoped'}
+            </p>
+          </div>
+          <div className="preview-aside">
+            <SharedRuleToggle rule={rule} onToggle={onToggle} />
+            <div className="detail-action-row">
+              {body !== null && (
+                <p className="health-token">{formatTokenCount(estimateTokensFromMarkdown(body, rule.name))}</p>
+              )}
+              <HealthBanner
+                name={rule.name}
+                findings={findings}
+                tokenEstimate={body !== null ? estimateTokensFromMarkdown(body, rule.name) : undefined}
+              />
+            </div>
+          </div>
+        </div>
         {error && <StatusNotice kind="rule" onRetry={() => setReloadKey((key) => key + 1)} />}
         {body === null && !error && <StatusSkeleton variant="preview" label="Loading rule" />}
         {body !== null && (
@@ -121,14 +150,17 @@ export default function RulesPanel({ onProjectBound: _onProjectBound }: { onProj
   const [rules, setRules] = useState<RuleRecord[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState(false);
+  const [healthReport, setHealthReport] = useState<HealthReport>([]);
   const refreshId = useRef(0);
 
   const refresh = useCallback(async () => {
     const id = ++refreshId.current;
-    const next = await bridge.listRules();
+    const [next, nextHealth] = await Promise.all([bridge.listRules(), bridge.health()]);
     if (id !== refreshId.current) return;
     setRules(next);
     setSelectedId((current) => (current && next.some((rule) => rule.id === current) ? current : null));
+    const report: HealthReport = nextHealth.ok ? nextHealth.value : [];
+    setHealthReport(report);
   }, [bridge]);
 
   useEffect(() => {
@@ -189,6 +221,7 @@ export default function RulesPanel({ onProjectBound: _onProjectBound }: { onProj
                         aria-label={`Details for ${rule.name}`}
                       />
                       <span className="rule-card-name">{ruleFileName(rule.name)}</span>
+                      <HealthMark name={rule.name} findings={findingsForSkill(healthReport, rule.id)} />
                       <SharedRuleToggle rule={rule} onToggle={(next) => void handleToggle(next)} />
                     </li>
                   ))}
@@ -199,7 +232,15 @@ export default function RulesPanel({ onProjectBound: _onProjectBound }: { onProj
         )}
       </section>
 
-      {selected && <RulePreviewDialog key={selected.id} rule={selected} onClose={() => setSelectedId(null)} />}
+      {selected && (
+        <RulePreviewDialog
+          key={selected.id}
+          rule={selected}
+          findings={rowsForSkill(selected.id, findingsForSkill(healthReport, selected.id))}
+          onToggle={(next) => void handleToggle(next)}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
     </>
   );
 }

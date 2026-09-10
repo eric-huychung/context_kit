@@ -32,7 +32,7 @@ describe('App', () => {
     renderWithProviders(<App />);
 
     expect(screen.getByText('Skil')).toBeInTheDocument();
-    expect(screen.getByText('skil 0.3.0')).toBeInTheDocument();
+    expect(screen.getByText('skil 0.5.0')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Commands' })).toHaveAttribute('aria-selected', 'true');
     expect(await screen.findByRole('heading', { name: 'Commands' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open Cursor workspace' })).not.toBeInTheDocument();
@@ -414,7 +414,20 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: 'Switch to /tmp/beta' })).toBeInTheDocument();
   });
 
-  it('shows leftovers on Sync and adopts them into both live trees', async () => {
+  it('shows a warning on the Sync rail when leftovers exist, even off the Sync tab', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+    engine.scan();
+    installTestBridge(engine, { projectRoot: DEFAULT_TEST_PROJECT_ROOT });
+
+    renderWithProviders(<App />);
+
+    const sync = screen.getByRole('tab', { name: 'Sync' });
+    expect(await within(sync).findByTitle('Leftovers to clean up')).toBeInTheDocument();
+    expect(sync.querySelector('.sync-dot')).not.toBeInTheDocument();
+  });
+
+  it('shows leftover-only skills as needs-import, then copies without deleting', async () => {
     const { engine, fs } = createInMemoryWorkspace();
     fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
     engine.scan();
@@ -423,29 +436,125 @@ describe('App', () => {
     renderWithProviders(<App />);
     await openSync();
 
-    expect(await screen.findByRole('heading', { name: 'Leftovers' })).toBeInTheDocument();
-    expect(screen.getByRole('list', { name: 'Leftover paths' })).toHaveTextContent('.cursor/skills/tdd');
+    expect(await screen.findByRole('button', { name: '1 leftover' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Cleanup' })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Use ours and remove leftovers' }));
+    await userEvent.click(screen.getByRole('button', { name: '1 leftover' }));
+    expect(await screen.findByRole('heading', { name: 'Cleanup' })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Needs import' })).toHaveTextContent('.cursor/skills/tdd');
+    expect(screen.queryByRole('list', { name: 'Ready to remove' })).not.toBeInTheDocument();
 
-    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Leftovers' })).not.toBeInTheDocument());
-    expect(isOk(fs.readFile('.agents/skills/tdd/SKILL.md'))).toBe(true);
+    await userEvent.click(screen.getByRole('button', { name: 'Import all' }));
+
+    await waitFor(() => expect(isOk(fs.readFile('.agents/skills/tdd/SKILL.md'))).toBe(true));
     expect(isOk(fs.readFile('.claude/skills/tdd/SKILL.md'))).toBe(true);
-    expect(isOk(fs.readFile('.skil/deprecated/.cursor/skills/tdd/SKILL.md'))).toBe(true);
+    expect(isOk(fs.readFile('.cursor/skills/tdd/SKILL.md'))).toBe(true);
+    expect(await screen.findByRole('list', { name: 'Ready to remove' })).toHaveTextContent('.cursor/skills/tdd');
   });
 
-  it('shows a friendly error when adopting leftovers fails, without dropping the list', async () => {
+  it('removes matching leftovers after import and leaves the live pair', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.agents/skills/tdd/SKILL.md', '# tdd\n');
+    fs.writeFile('.claude/skills/tdd/SKILL.md', '# tdd\n');
+    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+    engine.scan();
+    installTestBridge(engine, { projectRoot: DEFAULT_TEST_PROJECT_ROOT });
+
+    renderWithProviders(<App />);
+    await openSync();
+    await userEvent.click(await screen.findByRole('button', { name: '1 leftover' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Remove leftovers' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: '1 leftover' })).not.toBeInTheDocument());
+    expect(isOk(fs.readFile('.agents/skills/tdd/SKILL.md'))).toBe(true);
+    expect(isOk(fs.readFile('.skil/deprecated/.cursor/skills/tdd/SKILL.md'))).toBe(true);
+    expect(fs.readFile('.cursor/skills/tdd/SKILL.md').ok).toBe(false);
+  });
+
+  it('keeps drift in Conflicts and does not offer batch remove for it', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.agents/skills/tdd/SKILL.md', '# live\n');
+    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# leftover\n');
+    engine.scan();
+    installTestBridge(engine, { projectRoot: DEFAULT_TEST_PROJECT_ROOT });
+
+    renderWithProviders(<App />);
+    await openSync();
+
+    expect(await screen.findByRole('button', { name: '1 conflict' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '1 conflict' }));
+    expect(screen.getByRole('list', { name: 'Conflicts' })).toHaveTextContent('tdd');
+    expect(screen.queryByRole('button', { name: 'Remove leftovers' })).not.toBeInTheDocument();
+    expect(isOk(fs.readFile('.cursor/skills/tdd/SKILL.md'))).toBe(true);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Keep current' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '1 conflict' })).not.toBeInTheDocument());
+    expect(fs.readFile('.agents/skills/tdd/SKILL.md')).toEqual({ ok: true, value: '# live\n' });
+    expect(fs.readFile('.cursor/skills/tdd/SKILL.md').ok).toBe(false);
+  });
+
+  it('uses leftover content as live and drops the leftover path', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.agents/skills/tdd/SKILL.md', '# live\n');
+    fs.writeFile('.claude/skills/tdd/SKILL.md', '# live\n');
+    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# leftover\n');
+    engine.scan();
+    installTestBridge(engine, { projectRoot: DEFAULT_TEST_PROJECT_ROOT });
+
+    renderWithProviders(<App />);
+    await openSync();
+    await userEvent.click(await screen.findByRole('button', { name: '1 conflict' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Use leftover' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: '1 conflict' })).not.toBeInTheDocument());
+    expect(screen.queryByRole('list', { name: 'Conflicts' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Ready to remove' })).not.toBeInTheDocument();
+    expect(fs.readFile('.agents/skills/tdd/SKILL.md')).toEqual({ ok: true, value: '# leftover\n' });
+    expect(fs.readFile('.claude/skills/tdd/SKILL.md')).toEqual({ ok: true, value: '# leftover\n' });
+    expect(fs.readFile('.cursor/skills/tdd/SKILL.md').ok).toBe(false);
+  });
+
+  it('opens a two-pane compare when a conflict card is clicked', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.agents/skills/tdd/SKILL.md', '# tdd\n\nLive copy body.\n');
+    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n\nLeftover copy body.\n');
+    engine.scan();
+    installTestBridge(engine, { projectRoot: DEFAULT_TEST_PROJECT_ROOT });
+
+    renderWithProviders(<App />);
+    await openSync();
+    await userEvent.click(await screen.findByRole('button', { name: '1 conflict' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Compare tdd' }));
+
+    const compare = await screen.findByRole('dialog', { name: 'tdd' });
+    expect(compare).toHaveTextContent('Live copy body');
+    expect(compare).toHaveTextContent('Leftover copy body');
+    expect(compare).toHaveTextContent('.agents/skills/tdd');
+    expect(compare).toHaveTextContent('.cursor/skills/tdd');
+    expect(screen.getByRole('dialog', { name: 'Cleanup' })).toBeInTheDocument();
+    expect(within(compare).getByText('Live copy body.')).toHaveClass('sync-compare-line-changed');
+    expect(within(compare).getByText('Leftover copy body.')).toHaveClass('sync-compare-line-changed');
+    expect(within(compare).getAllByText('# tdd')[0]).not.toHaveClass('sync-compare-line-changed');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close compare' }));
+    expect(screen.queryByRole('dialog', { name: 'tdd' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Cleanup' })).toBeInTheDocument();
+  });
+
+  it('shows a friendly error when importing leftovers fails, without dropping the list', async () => {
     const { engine, fs } = createInMemoryWorkspace();
     fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
     engine.scan();
     const real = createTestBridge(engine, { projectRoot: DEFAULT_TEST_PROJECT_ROOT });
-    const bridge = { ...real, adoptLeftovers: async () => err(new Error('EACCES: permission denied')) };
+    const bridge = { ...real, importToCanonical: async () => err(new Error('EACCES: permission denied')) };
 
     renderWithProviders(<App />, { bridge });
     await openSync();
-    await userEvent.click(await screen.findByRole('button', { name: 'Use ours and remove leftovers' }));
+    await userEvent.click(await screen.findByRole('button', { name: '1 leftover' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Import all' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't adopt those leftovers");
-    expect(screen.getByRole('heading', { name: 'Leftovers' })).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't import those paths");
+    expect(screen.getByRole('heading', { name: 'Cleanup' })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Needs import' })).toHaveTextContent('.cursor/skills/tdd');
   });
 });

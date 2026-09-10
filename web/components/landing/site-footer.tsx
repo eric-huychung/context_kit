@@ -16,12 +16,15 @@ export function SiteFooter() {
           Reads your repo. Doesn&apos;t phone home.
         </p>
         <nav className="flex items-center gap-6 text-sm text-muted-foreground">
-          <a href="#download" className="transition-colors hover:text-foreground">
-            Open app
-          </a>
-          <a href="#how-it-works" className="transition-colors hover:text-foreground">
-            How it works
-          </a>
+          <Link href="/app" className="transition-colors hover:text-foreground">
+            App
+          </Link>
+          <Link href="/leaderboard" className="transition-colors hover:text-foreground">
+            Leaderboard
+          </Link>
+          <Link href="/cli" className="transition-colors hover:text-foreground">
+            CLI
+          </Link>
         </nav>
       </div>
     </footer>

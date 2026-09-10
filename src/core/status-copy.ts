@@ -9,7 +9,10 @@ export type StatusKind =
   | 'toggle'
   | 'enable'
   | 'create'
-  | 'adopt';
+  | 'adopt'
+  | 'import'
+  | 'leftover-remove'
+  | 'drift';
 
 /** User-facing copy for catalog and workspace failures. Never pass
  * Error.message through — those leak hostnames, paths, and stack fragments. */
@@ -63,6 +66,21 @@ export function statusCopy(kind: StatusKind): { title: string; detail: string } 
     case 'adopt':
       return {
         title: "Couldn't adopt those leftovers",
+        detail: 'Try again in a moment.',
+      };
+    case 'import':
+      return {
+        title: "Couldn't import those paths",
+        detail: 'Try again in a moment.',
+      };
+    case 'leftover-remove':
+      return {
+        title: "Couldn't remove those leftovers",
+        detail: 'Try again in a moment.',
+      };
+    case 'drift':
+      return {
+        title: "Couldn't resolve that conflict",
         detail: 'Try again in a moment.',
       };
     default:

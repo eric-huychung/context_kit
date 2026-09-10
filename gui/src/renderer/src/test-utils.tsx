@@ -5,8 +5,8 @@ import { InMemoryFileSystemAdapter } from '../../../../src/adapters/in-memory-fs
 import { InMemorySkillsAdapter } from '../../../../src/adapters/in-memory-skills.js';
 import { InMemoryUsageCollector } from '../../../../src/adapters/in-memory-usage.js';
 import type { ICollectionEngine } from '../../../../src/interfaces/engine.js';
-import { isOk, ok, type Result } from '../../../../src/core/result.js';
-import type { MarketPreviewData, MarketSearchRow, ShelfRole, SkilBridge, ScanResult } from '../../shared/ipc.js';
+import { err, isOk, ok, type Result } from '../../../../src/core/result.js';
+import type { MarketPreviewData, MarketSearchRow, ShelfRole, SkilBridge, ScanResult, SuggestResult } from '../../shared/ipc.js';
 import { forgetFolder, rememberFolder } from '../../shared/recent-folders.js';
 import { ThemeProvider } from './theme';
 import { BridgeProvider } from './bridge-context';
@@ -96,6 +96,10 @@ export type TestBridgeOptions = {
    * tests).
    */
   enginesByPath?: Record<string, ICollectionEngine>;
+  /** Whether an LLM key is saved at start. Default `false` (Settings' "no key" state). */
+  hasLlmKey?: boolean;
+  /** What `pingLlm` returns once a key is saved. Default success. */
+  pingResult?: Result<void>;
 };
 
 export type TestBridge = SkilBridge & {
@@ -116,6 +120,7 @@ export function createTestBridge(engine: ICollectionEngine, options: TestBridgeO
   let activeEngine = engine;
   let projectRoot: string | null = options.projectRoot ?? null;
   let recentFolders = options.recentFolders ?? [];
+  let llmKeySaved = options.hasLlmKey ?? false;
   if (projectRoot) recentFolders = rememberFolder(projectRoot, recentFolders);
   const scanListeners = new Set<(result: ScanResult) => void>();
 
@@ -218,6 +223,34 @@ export function createTestBridge(engine: ICollectionEngine, options: TestBridgeO
       if (result.ok) notifyScan(EMPTY_SCAN);
       return result;
     },
+    auditSync: async () => activeEngine.auditSync(),
+    previewSync: async (path) => activeEngine.previewSync(path),
+    importToCanonical: async (ids) => {
+      const result = await activeEngine.importToCanonical(ids);
+      if (result.ok) notifyScan(EMPTY_SCAN);
+      return result;
+    },
+    removeLeftovers: async (paths) => {
+      const result = await activeEngine.removeLeftovers(paths);
+      if (result.ok) notifyScan(EMPTY_SCAN);
+      return result;
+    },
+    resolveDrift: async (id, action, path) => {
+      const result = await activeEngine.resolveDrift(id, action, path);
+      if (result.ok) notifyScan(EMPTY_SCAN);
+      return result;
+    },
+    health: async () => activeEngine.health(),
+    hasLlmKey: async () => llmKeySaved,
+    saveLlmSettings: async () => {
+      llmKeySaved = true;
+      return ok(undefined);
+    },
+    pingLlm: async () => {
+      if (!llmKeySaved) return err(new Error('No LLM key saved yet.'));
+      return options.pingResult ?? ok(undefined);
+    },
+    suggest: async (shelves, role): Promise<Result<SuggestResult>> => activeEngine.suggest(shelves, { role }),
   };
 }
 

@@ -1,17 +1,22 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
-import { Geist, Geist_Mono, Fredoka } from 'next/font/google'
+import { Geist, Geist_Mono, Fredoka, Inter } from 'next/font/google'
 import { ThemeProvider } from '@/components/theme-provider'
 import './globals.css'
 
 const geistSans = Geist({ subsets: ['latin'], variable: '--font-geist-sans' })
 const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-geist-mono' })
 const fredoka = Fredoka({ subsets: ['latin'], variable: '--font-fredoka' })
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-inter',
+  weight: ['400', '500'],
+})
 
 export const metadata: Metadata = {
   title: 'Skil — Organize your agent skills into workflows',
   description:
-    'Connect a repo, scan .cursor / .claude / .windsurf / .agents for skills, organize them into your SDLC, and export back — no login required.',
+    'Connect a repo, scan .cursor / .claude / .codex / .agents for skills, organize them into your SDLC, and export back — no login required.',
   icons: {
     icon: [
       {
@@ -48,7 +53,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} ${fredoka.variable}`}
+      className={`${geistSans.variable} ${geistMono.variable} ${fredoka.variable} ${inter.variable}`}
       suppressHydrationWarning
     >
       <body className="bg-background font-sans antialiased">

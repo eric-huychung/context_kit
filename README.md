@@ -11,6 +11,9 @@ A CLI and desktop GUI for mapping AI skills onto SDLC commands (`/build`, `/tdd`
 - **Scan** = pull. Unions the live pair, every leftover root, and the parked root into one catalog. Hashes `SKILL.md`, reconciles gone/changed/new. Never writes on its own — only `setSkillEnabled` / `setCommandEnabled` / `setSharedRuleEnabled` / `adoptLeftovers` write.
 - **Install** = pulls a market skill straight into the live pair (`.agents/skills/<id>` + `.claude/skills/<id>`). No staging step.
 - **Usage** = how often catalog skills were read (Claude logs first). Counts only — not "used properly."
+- **Doctor** = `health()` / `skil doctor`. A read-only report per command: idle-cost, fat-body, unused, hash-split, and secret findings, math + regex only — no key needed. Add your own LLM key (BYOK) and it also flags skill-description conflicts and vague triggers.
+- **BYOK** = your own Anthropic/OpenAI/OpenRouter key, used to power doctor's conflict/vague-trigger findings and Suggest's rerank. Direct to the provider, never through skil's servers. CLI reads `SKIL_LLM_PROVIDER` + `SKIL_LLM_API_KEY`; GUI saves it encrypted on the Settings tab. No key, no LLM findings — Suggest still shows editorial picks.
+- **Suggest** = `suggest(shelves)` / `skil suggest` / Discover's Suggested tab. Without a key, editorial picks for a role (`data/market-picks.yaml`). With a BYOK key, fingerprints this project's `package.json` and reranks into a ~15-20 id shortlist not already in your catalog. Never installs anything itself.
 
 Bin is `skil`. `contextkit` is an alias of the same entry.
 
@@ -25,6 +28,8 @@ Bin is `skil`. `contextkit` is an alias of the same entry.
 7. If scan finds paths outside the live pair and parked root, those are leftovers. Adopt them (GUI: Sync tab) to fold them into the live pair and retire the old path — nothing is silently deleted.
 8. `skil rules` lists `AGENTS.md` shared sections and glob rule files. `skil rules enable <id>` / `skil rules disable <id>` toggles a shared section; glob rules refuse toggling.
 9. `skil usage` prints read counts from Claude session logs.
+10. `skil doctor` prints a findings table (token-ish cost + warn count per command); `skil doctor <name>` drills into one command's findings. No key required; set `SKIL_LLM_PROVIDER` + `SKIL_LLM_API_KEY` (or save a key on the Settings tab) to also get conflict/vague-trigger findings.
+11. `skil suggest` prints editorial picks for a role (`--role`, default `swe`). With the same env vars as doctor, it LLM-reranks against this project's `package.json`. The GUI's Discover has a matching **Suggested** chip.
 
 ## Commands
 
@@ -43,6 +48,8 @@ skil rules show <id>                        # print a rule body
 skil rules enable <id>                      # turn on a shared-law rule (upserts its AGENTS.md section)
 skil rules disable <id>                     # turn off a shared-law rule (removes the section, parks the body)
 skil usage                                  # print Claude read counts
+skil doctor [name]                          # findings table, or one command's findings — math+regex free, +LLM findings with a BYOK key
+skil suggest [--role swe]                   # editorial picks for a role; LLM-reranks when a BYOK key is set — never installs
 skil search [query] [--trending]            # typed search, or all-time / trending leaderboard
 ```
 
@@ -52,15 +59,18 @@ State lives in `.skil/state.json`. Missing file starts empty. If you still have 
 
 Live browse still goes through skil's backend with a Vercel OIDC token — no `SKILLS_API_KEY`. Default origin is `src/config/website.json` (`https://www.skil.website`). Override with `SKIL_API_URL`, then `CONTEXTKIT_API_URL`.
 
+BYOK for doctor's LLM findings is separate and never touches that backend: set `SKIL_LLM_PROVIDER` (`anthropic` | `openai` | `openrouter`) and `SKIL_LLM_API_KEY` and `skil doctor` calls that provider directly.
+
 ## Desktop GUI
 
-An Electron app (`gui/`) shares the same engine as the CLI. Window and brand say skil. Five tabs:
+An Electron app (`gui/`) shares the same engine as the CLI. Window and brand say skil. Six tabs:
 
 - **Sync** — pick or change the project folder, re-scan, see skills-by-source, and adopt Leftovers ("Use ours and remove leftovers"). Recent folders let you switch without losing state.
 - **Skills** — the full catalog (Market = added from Discover, Project = already on disk), searchable, 25 per page, On/Off toggle per row. Click a row for a details preview with Delete and (for market skills) Update. Toggling is the write; filing onto a command does not remove a skill from here.
-- **Discover** — market index when shelves have data, otherwise All time / Trending + typed search. Add installs straight into the live pair — no staging step.
+- **Discover** — market index when shelves have data, otherwise All time / Trending + typed search, plus a **Suggested** chip that only fetches when selected. No folder → connect prompt. Folder bound → editorial picks for the chosen role, with a warning + Settings link when no LLM key is saved. With a key, the same tab LLM-reranks against `package.json`. Add installs straight into the live pair — no staging step.
 - **Commands** — one list, grouped by SDLC stage. Create, file skills from a "From Skills" picker, remove a skill, delete a command, and an On/Off toggle that writes/parks the command's human-only skill in the live pair. No IDE workspace cards, no dock picker.
 - **Rules** — shared `AGENTS.md` sections with an On/Off toggle (parks/restores the section body), plus read-only path-scoped glob rules. Click a rule for a preview.
+- **Settings** — save an LLM key (provider + key, Save also tests it) to turn on doctor's conflict/vague-trigger findings and Suggest's rerank.
 
 Pick a folder and skil scans once. Re-scan is the header icon next to the path. Scan needs a connected folder.
 

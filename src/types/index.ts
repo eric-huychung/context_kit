@@ -130,12 +130,86 @@ export interface LeftoverRecord {
   path: string;
 }
 
+/** One non-canonical path classified for the Sync cleanup modal. */
+export type SyncRowKind = 'skill' | 'command' | 'rule';
+export type SyncRowStatus = 'needs-import' | 'ready-to-remove' | 'drift';
+export type DriftAction = 'keep-live' | 'import';
+
+export interface SyncRow {
+  kind: SyncRowKind;
+  id: string;
+  /** Non-canonical path (folder for skills, file for commands/rules). */
+  path: string;
+  canonicalPath?: string;
+  status: SyncRowStatus;
+  hashHere: string;
+  hashCanonical?: string;
+}
+
+/** Read-only leftover/drift classification. Counts are derived from `rows`. */
+export interface SyncAudit {
+  rows: SyncRow[];
+  readyCount: number;
+  driftCount: number;
+  needsImportCount: number;
+}
+
+/** Leftover vs live file bodies for a conflict preview. */
+export interface SyncPreview {
+  id: string;
+  kind: SyncRowKind;
+  leftoverPath: string;
+  leftoverBody: string;
+  canonicalPath: string;
+  canonicalBody: string;
+}
+
 /** Outcome of `adoptLeftovers()`. */
 export interface AdoptResult {
   /** Catalog ids copied into the live pair because they were missing there. */
   adopted: string[];
   /** Old leftover paths moved under `.skil/deprecated/`. */
   deprecated: string[];
+}
+
+/**
+ * One `health()` warning about a filed skill. Math/regex types
+ * (`idle-cost`, `fat-body`, `unused`, `hash-split`, `secret`) never
+ * require an LLM key. Unused needs project-level usage evidence and a
+ * 14-day grace; 0 reads on a fresh install is not a warning.
+ * `conflict` / `vague-trigger` are Phase 2, added
+ * only when an `LlmChat` is injected.
+ */
+export interface Finding {
+  type: 'idle-cost' | 'fat-body' | 'unused' | 'hash-split' | 'secret' | 'conflict' | 'vague-trigger';
+  skillId: string;
+  /** One-line human-readable why, shown as-is in the CLI and GUI. */
+  message: string;
+}
+
+/** `health()`'s per-command row. */
+export interface CommandHealth {
+  name: string;
+  /** Rough char/4 estimate of the always-loaded cost (filed skills' descriptions). Not a billing number. */
+  tokenEstimate: number;
+  warnCount: number;
+  findings: Finding[];
+  /** True once an LLM call actually ran for this command (Phase 2). Phase 1 is always `false`. */
+  usedLlm: boolean;
+}
+
+/** `health()`'s return shape: one row per command on the project map. */
+export type HealthReport = CommandHealth[];
+
+/**
+ * `suggest()`'s return shape: an ordered id shortlist (~15-20). Without a
+ * key this is the editorial list from `data/market-picks.yaml`; with a key
+ * the LLM reranks role-filtered shelf candidates against `package.json`.
+ * Ids only — the caller hydrates name/installs for display.
+ */
+export interface SuggestResult {
+  ids: string[];
+  usedLlm: boolean;
 }
 
 /** Outcome of `scan()` — pull. */

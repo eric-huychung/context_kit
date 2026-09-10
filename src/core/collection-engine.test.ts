@@ -1,13 +1,23 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { isErr, isOk } from './result.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { err, isErr, isOk, ok } from './result.js';
 import { CollectionEngine, STATE_PATH } from './collection-engine.js';
 import { InMemoryFileSystemAdapter } from '../adapters/in-memory-fs.js';
 import { InMemorySkillsAdapter } from '../adapters/in-memory-skills.js';
 import { InMemoryUsageCollector } from '../adapters/in-memory-usage.js';
 import { RealFileSystemAdapter } from '../adapters/real-fs-adapter.js';
 import type { IDE } from '../types/index.js';
+import type { LlmChat } from '../llm/llm-chat.js';
+
+function backdateFirstCommand(disk: InMemoryFileSystemAdapter, createdAt: string): void {
+  const loaded = disk.readJSON<{ commands: Array<{ createdAt: string }> }>(STATE_PATH);
+  if (!isOk(loaded) || !loaded.value.commands[0]) {
+    throw new Error('expected a persisted command to backdate');
+  }
+  loaded.value.commands[0].createdAt = createdAt;
+  disk.writeJSON(STATE_PATH, loaded.value);
+}
 
 /**
  * Mimics `npx skills add --agent universal` (vercel-labs/skills): dumps
@@ -682,6 +692,59 @@ describe('CollectionEngine', () => {
 
       for (const root of ['.cursor', '.codex', '.github', '.windsurf']) {
         expect(isErr(fs.readFile(`${root}/skills/tdd/SKILL.md`))).toBe(true);
+      }
+    });
+
+    it('prunes empty parent dirs when parking a nested skill', async () => {
+      fs.writeFile('.agents/skills/build/ui/brand/SKILL.md', '# brand\n');
+      fs.writeFile('.claude/skills/build/ui/brand/SKILL.md', '# brand\n');
+      fs.writeFile('.agents/skills/other/SKILL.md', '# other\n');
+      engine.scan();
+
+      const result = await engine.setSkillEnabled('build/ui/brand', false);
+
+      expect(isOk(result)).toBe(true);
+      expect(fs.listAllFiles('.agents/skills/build')).toEqual({ ok: true, value: [] });
+      expect(fs.listAllFiles('.claude/skills/build')).toEqual({ ok: true, value: [] });
+      expect(isOk(fs.readFile('.skil/parked/skills/build/ui/brand/SKILL.md'))).toBe(true);
+      expect(isOk(fs.readFile('.agents/skills/other/SKILL.md'))).toBe(true);
+    });
+
+    it('keeps parent dir when a sibling skill shares it after parking', async () => {
+      fs.writeFile('.agents/skills/build/ui/brand/SKILL.md', '# brand\n');
+      fs.writeFile('.claude/skills/build/ui/brand/SKILL.md', '# brand\n');
+      fs.writeFile('.agents/skills/build/ui/design/SKILL.md', '# design\n');
+      engine.scan();
+
+      const result = await engine.setSkillEnabled('build/ui/brand', false);
+
+      expect(isOk(result)).toBe(true);
+      expect(isErr(fs.readFile('.agents/skills/build/ui/brand/SKILL.md'))).toBe(true);
+      expect(isOk(fs.readFile('.agents/skills/build/ui/design/SKILL.md'))).toBe(true);
+      expect(isOk(fs.readFile('.skil/parked/skills/build/ui/brand/SKILL.md'))).toBe(true);
+    });
+
+    it('prunes empty parent dirs on a real disk when parking a nested skill', async () => {
+      const tmpDir = mkdtempSync(join(process.cwd(), 'tmp-skil-park-'));
+      try {
+        const realFs = new RealFileSystemAdapter(tmpDir);
+        const realEngine = new CollectionEngine(realFs, new InMemorySkillsAdapter());
+        realFs.writeFile('.agents/skills/build/ui/brand/SKILL.md', '# brand\n');
+        realFs.writeFile('.claude/skills/build/ui/brand/SKILL.md', '# brand\n');
+        realFs.writeFile('.agents/skills/other/SKILL.md', '# other\n');
+        realEngine.scan();
+
+        const result = await realEngine.setSkillEnabled('build/ui/brand', false);
+
+        expect(isOk(result)).toBe(true);
+        expect(existsSync(join(tmpDir, '.agents', 'skills', 'build'))).toBe(false);
+        expect(existsSync(join(tmpDir, '.claude', 'skills', 'build'))).toBe(false);
+        expect(existsSync(join(tmpDir, '.skil', 'parked', 'skills', 'build', 'ui', 'brand', 'SKILL.md'))).toBe(
+          true
+        );
+        expect(existsSync(join(tmpDir, '.agents', 'skills', 'other', 'SKILL.md'))).toBe(true);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
       }
     });
   });
@@ -1365,6 +1428,36 @@ describe('CollectionEngine', () => {
     });
   });
 
+  describe('setCommandEnabled', () => {
+    it('prunes empty parent dirs when turning a command off', async () => {
+      engine.create('build/ui', ['tdd']);
+      await engine.setCommandEnabled('build/ui', true);
+
+      const result = await engine.setCommandEnabled('build/ui', false);
+
+      expect(isOk(result)).toBe(true);
+      expect(fs.listAllFiles('.agents/skills/build')).toEqual({ ok: true, value: [] });
+      expect(fs.listAllFiles('.claude/skills/build')).toEqual({ ok: true, value: [] });
+      expect(isOk(fs.readFile('.skil/parked/commands/build/ui/SKILL.md'))).toBe(true);
+    });
+
+    it('removes skil-stamped command files from IDE command dirs when turned off', async () => {
+      engine.create('build', ['tdd']);
+      fs.writeFile(
+        '.cursor/commands/build.md',
+        '---\nname: /build\nskills: []\ngenerated_by: skil\ngenerated_at: 2026-01-01T00:00:00.000Z\n---\n'
+      );
+      await engine.setCommandEnabled('build', true);
+
+      const result = await engine.setCommandEnabled('build', false);
+
+      expect(isOk(result)).toBe(true);
+      expect(isErr(fs.readFile('.agents/skills/build/SKILL.md'))).toBe(true);
+      expect(isErr(fs.readFile('.cursor/commands/build.md'))).toBe(true);
+      expect(isOk(fs.readFile('.skil/parked/commands/build/SKILL.md'))).toBe(true);
+    });
+  });
+
   describe('write-through', () => {
     it('does not write a live command-skill stamp until the command is turned on', () => {
       engine.create('build', []);
@@ -1482,6 +1575,289 @@ describe('CollectionEngine', () => {
     });
   });
 
+  describe('health', () => {
+    it('reports zero warnings for a command with no filed skills', async () => {
+      engine.create('empty', []);
+
+      const result = await engine.health();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value).toEqual([
+          { name: 'empty', tokenEstimate: expect.any(Number), warnCount: 0, findings: [], usedLlm: false },
+        ]);
+      }
+    });
+
+    it('never crashes and needs no LLM key: idle-cost, fat-body, hash-split, secret all populate', async () => {
+      const longDescription = 'x'.repeat(501);
+      const body = (marker: string) =>
+        `---\nname: tdd\ndescription: ${longDescription}\n---\n${Array.from({ length: 501 }, () => 'line').join('\n')}\nkey: sk-abcdefghijklmnopqrstuvwx\n${marker}\n`;
+      // Both live copies carry the full fat/secret/idle-cost content (so readSkillMd's
+      // "first readable path" pick doesn't matter) but differ by one trailing marker,
+      // so they hash differently and hash-split still fires.
+      fs.writeFile('.agents/skills/tdd/SKILL.md', body('agents-copy'));
+      fs.writeFile('.claude/skills/tdd/SKILL.md', body('claude-copy'));
+      engine.scan();
+      engine.create('build', ['tdd']);
+
+      const result = await engine.health();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        const build = result.value.find((row) => row.name === 'build');
+        expect(build?.usedLlm).toBe(false);
+        const types = build?.findings.map((f) => f.type).sort();
+        expect(types).toEqual(['fat-body', 'hash-split', 'idle-cost', 'secret']);
+      }
+    });
+
+    it('does not flag unused when the project has no recorded reads', async () => {
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      engine.scan();
+      engine.create('build', ['tdd']);
+
+      const result = await engine.health();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        const build = result.value.find((row) => row.name === 'build');
+        expect(build?.findings.some((f) => f.type === 'unused')).toBe(false);
+      }
+    });
+
+    it('flags unused as false once usage() reports a read', async () => {
+      const usage = new InMemoryUsageCollector();
+      usage.seed([{ skillId: 'tdd', source: 'claude' }]);
+      engine = new CollectionEngine(fs, skills, usage);
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      engine.scan();
+      engine.create('build', ['tdd']);
+
+      const result = await engine.health();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        const build = result.value.find((row) => row.name === 'build');
+        expect(build?.findings.some((f) => f.type === 'unused')).toBe(false);
+      }
+    });
+
+    it('flags unused on an unread skill when a peer has reads and grace has passed', async () => {
+      const usage = new InMemoryUsageCollector();
+      usage.seed([{ skillId: 'design', source: 'claude' }]);
+      engine = new CollectionEngine(fs, skills, usage);
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.cursor/skills/design/SKILL.md', '# design\n');
+      engine.scan();
+      engine.create('build', ['tdd', 'design']);
+      backdateFirstCommand(fs, '2020-01-01T00:00:00.000Z');
+      engine = new CollectionEngine(fs, skills, usage);
+
+      const result = await engine.health();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        const build = result.value.find((row) => row.name === 'build');
+        expect(build?.findings.some((f) => f.type === 'unused' && f.skillId === 'tdd')).toBe(true);
+        expect(build?.findings.some((f) => f.type === 'unused' && f.skillId === 'design')).toBe(false);
+      }
+    });
+
+    it('does not flag unused during grace even when a peer has reads', async () => {
+      const usage = new InMemoryUsageCollector();
+      usage.seed([{ skillId: 'design', source: 'claude' }]);
+      engine = new CollectionEngine(fs, skills, usage);
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.cursor/skills/design/SKILL.md', '# design\n');
+      engine.scan();
+      engine.create('build', ['tdd', 'design']);
+
+      const result = await engine.health();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        const build = result.value.find((row) => row.name === 'build');
+        expect(build?.findings.some((f) => f.type === 'unused')).toBe(false);
+      }
+    });
+
+    it('persists nothing to state.json', async () => {
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      engine.scan();
+      engine.create('build', ['tdd']);
+      const before = fs.readJSON(STATE_PATH);
+
+      await engine.health();
+
+      expect(fs.readJSON(STATE_PATH)).toEqual(before);
+    });
+
+    describe('with an LlmChat', () => {
+      function fakeChat(response: string): LlmChat {
+        return { complete: async () => ok(response) };
+      }
+
+      it('adds conflict/vague findings and marks usedLlm true for a command with filed skills', async () => {
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+        fs.writeFile('.cursor/skills/refactor/SKILL.md', '# refactor\n');
+        engine.scan();
+        engine.create('build', ['tdd', 'refactor']);
+        const chat = fakeChat(
+          JSON.stringify({ conflicts: [{ a: 'tdd', b: 'refactor', why: 'both fire on the same trigger' }], vague: [] })
+        );
+        const withLlm = new CollectionEngine(fs, skills, undefined, undefined, chat);
+
+        const result = await withLlm.health();
+
+        expect(isOk(result)).toBe(true);
+        if (isOk(result)) {
+          const build = result.value.find((row) => row.name === 'build');
+          expect(build?.usedLlm).toBe(true);
+          expect(build?.findings).toContainEqual(
+            expect.objectContaining({ type: 'conflict', skillId: 'tdd' })
+          );
+        }
+      });
+
+      it('does not call the LLM for a command with no filed skills, and usedLlm stays false', async () => {
+        engine.create('empty', []);
+        const complete = vi.fn(async () => ok('{}'));
+        const withLlm = new CollectionEngine(fs, skills, undefined, undefined, { complete });
+
+        const result = await withLlm.health();
+
+        expect(complete).not.toHaveBeenCalled();
+        expect(isOk(result)).toBe(true);
+        if (isOk(result)) {
+          expect(result.value.find((row) => row.name === 'empty')?.usedLlm).toBe(false);
+        }
+      });
+
+      it('degrades silently on a failed LLM call: usedLlm stays false and math+regex findings still populate', async () => {
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+        engine.scan();
+        engine.create('build', ['tdd']);
+        const withLlm = new CollectionEngine(fs, skills, undefined, undefined, {
+          complete: async () => err(new Error('LlmChat: openai rejected the API key (401).')),
+        });
+
+        const result = await withLlm.health();
+
+        expect(isOk(result)).toBe(true);
+        if (isOk(result)) {
+          const build = result.value.find((row) => row.name === 'build');
+          expect(build?.usedLlm).toBe(false);
+          expect(build?.findings.some((f) => f.type === 'conflict' || f.type === 'vague-trigger')).toBe(false);
+          expect(build?.findings.some((f) => f.type === 'unused')).toBe(false);
+        }
+      });
+
+      it('with no LlmChat injected, output is unchanged from Phase 1 (no conflict/vague findings ever appear)', async () => {
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+        engine.scan();
+        engine.create('build', ['tdd']);
+
+        const result = await engine.health();
+
+        expect(isOk(result)).toBe(true);
+        if (isOk(result)) {
+          const build = result.value.find((row) => row.name === 'build');
+          expect(build?.usedLlm).toBe(false);
+          expect(build?.findings.some((f) => f.type === 'conflict' || f.type === 'vague-trigger')).toBe(false);
+        }
+      });
+    });
+  });
+
+  describe('suggest', () => {
+    const shelves = [
+      {
+        slug: 'swe',
+        label: 'SWE',
+        fields: [
+          {
+            slug: 'frontend',
+            label: 'Frontend',
+            skills: [
+              { id: 'obra/react-patterns', name: 'React patterns', installs: 1200, rank: 1 },
+              { id: 'vercel-labs/nextjs-guide', name: 'Next.js guide', installs: 500, rank: 2 },
+            ],
+          },
+        ],
+      },
+    ];
+
+    it('without a key: returns editorial picks for the role and never calls the LLM', async () => {
+      const result = await engine.suggest(shelves, { role: 'swe' });
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.usedLlm).toBe(false);
+        expect(result.value.ids.length).toBeGreaterThan(0);
+        expect(result.value.ids).toContain('mattpocock/skills/tdd');
+      }
+    });
+
+    it('with a key: ranks a fixture shelf by package.json deps into a shortlist', async () => {
+      fs.writeFile('package.json', JSON.stringify({ dependencies: { react: '^18.0.0' } }));
+      const chat: LlmChat = {
+        complete: async () => ok(JSON.stringify({ ids: ['obra/react-patterns', 'vercel-labs/nextjs-guide'] })),
+      };
+      const withLlm = new CollectionEngine(fs, skills, undefined, undefined, chat);
+
+      const result = await withLlm.suggest(shelves, { role: 'swe' });
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.usedLlm).toBe(true);
+        expect(result.value.ids).toEqual(['obra/react-patterns', 'vercel-labs/nextjs-guide']);
+      }
+    });
+
+    it('excludes ids already in the catalog', async () => {
+      fs.writeFile('.cursor/skills/obra/react-patterns/SKILL.md', '# react patterns\n');
+      engine.scan();
+      const chat: LlmChat = {
+        complete: async () => ok(JSON.stringify({ ids: ['obra/react-patterns', 'vercel-labs/nextjs-guide'] })),
+      };
+      const withLlm = new CollectionEngine(fs, skills, undefined, undefined, chat);
+
+      const result = await withLlm.suggest(shelves, { role: 'swe' });
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.ids).not.toContain('obra/react-patterns');
+      }
+    });
+
+    it('falls back to the fingerprint-only order when the LLM call fails', async () => {
+      fs.writeFile('package.json', JSON.stringify({ dependencies: { react: '^18.0.0' } }));
+      const withLlm = new CollectionEngine(fs, skills, undefined, undefined, {
+        complete: async () => err(new Error('LlmChat: openai rejected the API key (401).')),
+      });
+
+      const result = await withLlm.suggest(shelves, { role: 'swe' });
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.usedLlm).toBe(true);
+        expect(result.value.ids).toEqual(['obra/react-patterns', 'vercel-labs/nextjs-guide']);
+      }
+    });
+
+    it('persists nothing to state.json', async () => {
+      const before = fs.readJSON(STATE_PATH);
+      const withLlm = new CollectionEngine(fs, skills, undefined, undefined, {
+        complete: async () => ok(JSON.stringify({ ids: [] })),
+      });
+
+      await withLlm.suggest(shelves, { role: 'swe' });
+
+      expect(fs.readJSON(STATE_PATH)).toEqual(before);
+    });
+  });
+
   describe('rules', () => {
     it('lists AGENTS.md shared-law sections and path-scoped glob rule files, and scan does not touch either', () => {
       fs.writeFile(
@@ -1523,6 +1899,28 @@ describe('CollectionEngine', () => {
           '<!-- skil:rule pair-programming/behavior -->\n# behavior\n<!-- /skil:rule pair-programming/behavior -->\n\n' +
             '<!-- skil:rule security -->\n# security\n<!-- /skil:rule security -->\n',
       });
+    });
+
+    it('drops an imported glob copy from rules() so it is leftover, not a second row', () => {
+      fs.writeFile(
+        'AGENTS.md',
+        '<!-- skil:rule behavior -->\n# behavior\n<!-- /skil:rule behavior -->\n'
+      );
+      fs.writeFile('.cursor/rules/behavior.mdc', '# behavior\n');
+
+      const rules = engine.rules();
+      expect(rules).toEqual([
+        expect.objectContaining({ id: 'behavior', kind: 'shared', path: 'AGENTS.md' }),
+      ]);
+      const leftovers = engine.leftovers();
+      expect(isOk(leftovers)).toBe(true);
+      if (isOk(leftovers)) {
+        expect(leftovers.value).toContainEqual({
+          kind: 'rule',
+          id: 'behavior',
+          path: '.cursor/rules/behavior.mdc',
+        });
+      }
     });
 
     it('reads a rule body by path id', () => {
@@ -1629,7 +2027,7 @@ describe('CollectionEngine', () => {
   });
 
   describe('leftovers', () => {
-    it('lists a leftover skill path, a leftover command file, and leftover .codex/rules, but not a live skill, a parked skill, or a glob rule', () => {
+    it('lists a leftover skill path, a leftover command file, leftover .codex/rules, and leftover glob rules, but not a live skill or a parked skill', () => {
       fs.writeFile('.agents/skills/tdd/SKILL.md', '# tdd\n');
       fs.writeFile('.claude/skills/tdd/SKILL.md', '# tdd\n');
       fs.writeFile('.cursor/skills/other/SKILL.md', '# other\n');
@@ -1651,12 +2049,12 @@ describe('CollectionEngine', () => {
         expect.arrayContaining([
           { kind: 'skill', id: 'other', path: '.cursor/skills/other' },
           { kind: 'command', id: 'build', path: '.cursor/commands/build.md' },
-          { kind: 'rule', id: '.codex/rules/pair-programming/behavior.md', path: '.codex/rules/pair-programming/behavior.md' },
+          { kind: 'rule', id: 'pair-programming/behavior', path: '.codex/rules/pair-programming/behavior.md' },
+          { kind: 'rule', id: 'behavior', path: '.cursor/rules/behavior.mdc' },
         ])
       );
       expect(result.value.some((row) => row.kind === 'skill' && row.id === 'tdd')).toBe(false);
-      expect(result.value.some((row) => row.id === 'design')).toBe(false);
-      expect(result.value.some((row) => row.path === '.cursor/rules/behavior.mdc')).toBe(false);
+      expect(result.value.some((row) => row.id === 'design' && row.kind === 'skill')).toBe(false);
     });
   });
 
@@ -1704,6 +2102,220 @@ describe('CollectionEngine', () => {
       }
       expect(fs.readFile('.skil/parked/skills/design/SKILL.md')).toEqual({ ok: true, value: '# design\n' });
       expect(isErr(fs.readFile('.agents/skills/design/SKILL.md'))).toBe(true);
+    });
+  });
+
+  describe('auditSync', () => {
+    it('splits leftover-only, matching extra copies, and hash drift into three statuses', () => {
+      fs.writeFile('.cursor/skills/other/SKILL.md', '# other\n');
+      fs.writeFile('.agents/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.claude/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.agents/skills/design/SKILL.md', '# live design\n');
+      fs.writeFile('.cursor/skills/design/SKILL.md', '# leftover design\n');
+      engine.scan();
+
+      const result = engine.auditSync();
+
+      expect(isOk(result)).toBe(true);
+      if (!isOk(result)) return;
+      expect(result.value.needsImportCount).toBe(1);
+      expect(result.value.readyCount).toBe(1);
+      expect(result.value.driftCount).toBe(1);
+      expect(result.value.rows.find((row) => row.id === 'other')?.status).toBe('needs-import');
+      expect(result.value.rows.find((row) => row.id === 'tdd')?.status).toBe('ready-to-remove');
+      expect(result.value.rows.find((row) => row.id === 'design')?.status).toBe('drift');
+    });
+
+    it('does not list parked skills', () => {
+      fs.writeFile('.skil/parked/skills/design/SKILL.md', '# design\n');
+      engine.scan();
+
+      const result = engine.auditSync();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.rows.some((row) => row.id === 'design')).toBe(false);
+      }
+    });
+  });
+
+  describe('importToCanonical', () => {
+    it('copies a leftover skill into the live pair and leaves the old path in place', async () => {
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      engine.scan();
+
+      const result = await engine.importToCanonical(['tdd']);
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.adopted).toEqual(['tdd']);
+        expect(result.value.deprecated).toEqual([]);
+      }
+      expect(isOk(fs.readFile('.agents/skills/tdd/SKILL.md'))).toBe(true);
+      expect(isOk(fs.readFile('.claude/skills/tdd/SKILL.md'))).toBe(true);
+      expect(isOk(fs.readFile('.cursor/skills/tdd/SKILL.md'))).toBe(true);
+    });
+
+    it('skips ids that are already in canonical or drifting', async () => {
+      fs.writeFile('.agents/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.claude/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.agents/skills/design/SKILL.md', '# live\n');
+      fs.writeFile('.cursor/skills/design/SKILL.md', '# leftover\n');
+      engine.scan();
+
+      const result = await engine.importToCanonical(['tdd', 'design']);
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.adopted).toEqual([]);
+      }
+      expect(fs.readFile('.cursor/skills/design/SKILL.md')).toEqual({ ok: true, value: '# leftover\n' });
+      expect(fs.readFile('.agents/skills/design/SKILL.md')).toEqual({ ok: true, value: '# live\n' });
+    });
+
+    it('imports a leftover glob rule into AGENTS.md and leaves the file for remove', async () => {
+      fs.writeFile('.cursor/rules/behavior.mdc', '# behavior\n');
+
+      const result = await engine.importToCanonical(['behavior']);
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.adopted).toEqual(['behavior']);
+      }
+      expect(isOk(fs.readFile('AGENTS.md'))).toBe(true);
+      expect(isOk(fs.readFile('.cursor/rules/behavior.mdc'))).toBe(true);
+      expect(engine.rules().some((rule) => rule.kind === 'glob' && rule.name === 'behavior')).toBe(false);
+      const audit = engine.auditSync();
+      expect(isOk(audit)).toBe(true);
+      if (isOk(audit)) {
+        expect(audit.value.rows.find((row) => row.path === '.cursor/rules/behavior.mdc')?.status).toBe(
+          'ready-to-remove'
+        );
+      }
+    });
+  });
+
+  describe('removeLeftovers', () => {
+    it('deprecates a matching leftover and leaves the live pair', async () => {
+      fs.writeFile('.agents/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.claude/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      engine.scan();
+
+      const result = await engine.removeLeftovers(['.cursor/skills/tdd']);
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.deprecated).toEqual(['.skil/deprecated/.cursor/skills/tdd']);
+      }
+      expect(isOk(fs.readFile('.agents/skills/tdd/SKILL.md'))).toBe(true);
+      expect(isErr(fs.readFile('.cursor/skills/tdd/SKILL.md'))).toBe(true);
+      expect(isOk(fs.readFile('.skil/deprecated/.cursor/skills/tdd/SKILL.md'))).toBe(true);
+    });
+
+    it('refuses drift and needs-import so a blind remove cannot delete the copy to keep', async () => {
+      fs.writeFile('.cursor/skills/other/SKILL.md', '# other\n');
+      fs.writeFile('.agents/skills/design/SKILL.md', '# live\n');
+      fs.writeFile('.cursor/skills/design/SKILL.md', '# leftover\n');
+      engine.scan();
+
+      const missing = await engine.removeLeftovers(['.cursor/skills/other']);
+      expect(isErr(missing)).toBe(true);
+      expect(isOk(fs.readFile('.cursor/skills/other/SKILL.md'))).toBe(true);
+
+      const drift = await engine.removeLeftovers(['.cursor/skills/design']);
+      expect(isErr(drift)).toBe(true);
+      expect(isOk(fs.readFile('.cursor/skills/design/SKILL.md'))).toBe(true);
+    });
+  });
+
+  describe('resolveDrift', () => {
+    it('keep-live deprecates the leftover and leaves the canonical copy', async () => {
+      fs.writeFile('.agents/skills/tdd/SKILL.md', '# live\n');
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# leftover\n');
+      engine.scan();
+
+      const result = await engine.resolveDrift('tdd', 'keep-live', '.cursor/skills/tdd');
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.deprecated).toEqual(['.skil/deprecated/.cursor/skills/tdd']);
+      }
+      expect(fs.readFile('.agents/skills/tdd/SKILL.md')).toEqual({ ok: true, value: '# live\n' });
+      expect(isErr(fs.readFile('.cursor/skills/tdd/SKILL.md'))).toBe(true);
+    });
+
+    it('import overwrites canonical from the leftover and deprecates the leftover path', async () => {
+      fs.writeFile('.agents/skills/tdd/SKILL.md', '# live\n');
+      fs.writeFile('.claude/skills/tdd/SKILL.md', '# live\n');
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# leftover\n');
+      engine.scan();
+
+      const result = await engine.resolveDrift('tdd', 'import', '.cursor/skills/tdd');
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.adopted).toEqual(['tdd']);
+        expect(result.value.deprecated).toEqual(['.skil/deprecated/.cursor/skills/tdd']);
+      }
+      expect(fs.readFile('.agents/skills/tdd/SKILL.md')).toEqual({ ok: true, value: '# leftover\n' });
+      expect(fs.readFile('.claude/skills/tdd/SKILL.md')).toEqual({ ok: true, value: '# leftover\n' });
+      expect(isErr(fs.readFile('.cursor/skills/tdd/SKILL.md'))).toBe(true);
+      const audit = engine.auditSync();
+      expect(isOk(audit)).toBe(true);
+      if (isOk(audit)) {
+        expect(audit.value.rows.find((row) => row.id === 'tdd')).toBeUndefined();
+      }
+    });
+
+    it('refuses to overwrite a live command skill with a leftover skill of the same name', async () => {
+      engine.create('build', []);
+      await engine.setCommandEnabled('build', true);
+      fs.writeFile('.cursor/skills/build/SKILL.md', '# leftover skill\n');
+      engine.scan();
+
+      const result = await engine.resolveDrift('build', 'import', '.cursor/skills/build');
+
+      expect(isErr(result)).toBe(true);
+      if (isErr(result)) {
+        expect(result.code).toBe('COMMAND_NAME_COLLISION');
+      }
+      expect(isOk(fs.readFile('.agents/skills/build/SKILL.md'))).toBe(true);
+      expect(fs.readFile('.cursor/skills/build/SKILL.md')).toEqual({ ok: true, value: '# leftover skill\n' });
+    });
+  });
+
+  describe('previewSync', () => {
+    it('returns leftover and live SKILL.md for a drifted skill', () => {
+      fs.writeFile('.agents/skills/tdd/SKILL.md', '# live body\n');
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# leftover body\n');
+      engine.scan();
+
+      const result = engine.previewSync('.cursor/skills/tdd');
+
+      expect(result).toEqual({
+        ok: true,
+        value: {
+          id: 'tdd',
+          kind: 'skill',
+          leftoverPath: '.cursor/skills/tdd',
+          leftoverBody: '# leftover body\n',
+          canonicalPath: '.agents/skills/tdd',
+          canonicalBody: '# live body\n',
+        },
+      });
+    });
+
+    it('errors when the path is not a conflict', () => {
+      fs.writeFile('.agents/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      engine.scan();
+
+      const result = engine.previewSync('.cursor/skills/tdd');
+
+      expect(isErr(result)).toBe(true);
     });
   });
 });

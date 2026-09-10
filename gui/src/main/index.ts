@@ -7,12 +7,16 @@ import { getApiBaseUrl } from '../../../src/config/website.js';
 import { GLOB_RULE_DIRS, ROOT_RULE_FILES } from '../../../src/core/project-rules.js';
 import { watchRoots } from '../../../src/core/dock-layout.js';
 import { createDiscover } from '../../../src/backend/discover.js';
+import type { ShelfRole } from '../../../src/backend/market-types.js';
 import { DiskWatch, watchFilesByParent } from '../../../src/watch/disk-watch.js';
 import type { ICollectionEngine } from '../../../src/interfaces/engine.js';
-import type { ScanResult } from '../../../src/types/index.js';
-import { isOk } from '../../../src/core/result.js';
+import type { DriftAction, ScanResult } from '../../../src/types/index.js';
+import { err, isOk } from '../../../src/core/result.js';
+import { pingLlmChat } from '../../../src/llm/llm-chat.js';
+import type { LlmProvider } from '../../../src/llm/llm-chat.js';
 import { IPC_CHANNELS } from '../shared/ipc.js';
 import { forgetFolder, parseRecentFolders, rememberFolder } from '../shared/recent-folders.js';
+import { hasLlmKey, loadLlmChat, saveLlmSettings } from './llm-settings.js';
 
 const WATCH_ROOTS = watchRoots(Object.keys(GLOB_RULE_DIRS));
 
@@ -33,9 +37,15 @@ const discover = createDiscover({
 
 function currentEngine(): ICollectionEngine {
   if (!engine) {
-    engine = createEngine(join(app.getPath('userData'), 'workspace'));
+    engine = createEngine(join(app.getPath('userData'), 'workspace'), loadLlmChat());
   }
   return engine;
+}
+
+/** Rebuilds the current session's engine against the same root with the latest saved LLM settings. */
+function rebindLlmChat(): void {
+  const root = projectRoot ?? join(app.getPath('userData'), 'workspace');
+  engine = createEngine(root, loadLlmChat());
 }
 
 function muteOwnWrites(): void {
@@ -129,7 +139,7 @@ function saveRecentFolders(next: string[]): void {
 
 function bindProject(path: string): string | null {
   try {
-    engine = createEngine(path);
+    engine = createEngine(path, loadLlmChat());
   } catch (error) {
     dialog.showErrorBox('skil', 'Could not open this folder.');
     return null;
@@ -247,6 +257,42 @@ ipcMain.handle(IPC_CHANNELS.adoptLeftovers, async (_event, ids?: string[]) => {
   muteOwnWrites();
   return result;
 });
+ipcMain.handle(IPC_CHANNELS.auditSync, () => currentEngine().auditSync());
+ipcMain.handle(IPC_CHANNELS.previewSync, (_event, path: string) => currentEngine().previewSync(path));
+ipcMain.handle(IPC_CHANNELS.importToCanonical, async (_event, ids: string[]) => {
+  const result = await currentEngine().importToCanonical(ids);
+  muteOwnWrites();
+  return result;
+});
+ipcMain.handle(IPC_CHANNELS.removeLeftovers, async (_event, paths: string[]) => {
+  const result = await currentEngine().removeLeftovers(paths);
+  muteOwnWrites();
+  return result;
+});
+ipcMain.handle(IPC_CHANNELS.resolveDrift, async (_event, id: string, action: DriftAction, path?: string) => {
+  const result = await currentEngine().resolveDrift(id, action, path);
+  muteOwnWrites();
+  return result;
+});
+ipcMain.handle(IPC_CHANNELS.health, () => currentEngine().health());
+ipcMain.handle(IPC_CHANNELS.hasLlmKey, () => hasLlmKey());
+ipcMain.handle(IPC_CHANNELS.saveLlmSettings, (_event, provider: LlmProvider, apiKey: string) => {
+  const result = saveLlmSettings(provider, apiKey);
+  if (isOk(result)) {
+    rebindLlmChat();
+  }
+  return result;
+});
+ipcMain.handle(IPC_CHANNELS.pingLlm, async () => {
+  const chat = loadLlmChat();
+  if (!chat) {
+    return err(new Error('No LLM key saved yet.'));
+  }
+  return pingLlmChat(chat);
+});
+ipcMain.handle(IPC_CHANNELS.suggest, (_event, shelves: ShelfRole[], role?: string) =>
+  currentEngine().suggest(shelves, { role }),
+);
 
 // Brand icon (regenerate via scripts/generate-icons.mjs). out/main -> gui/resources.
 const APP_ICON = join(import.meta.dirname, '../../resources/icon.png');

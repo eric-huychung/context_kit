@@ -39,6 +39,81 @@ describe('RulesPanel', () => {
     expect(screen.queryByRole('dialog', { name: 'pair-programming/behavior' })).not.toBeInTheDocument();
   });
 
+  it('hides a glob copy after it is imported into AGENTS.md', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile(
+      'AGENTS.md',
+      '<!-- skil:rule behavior -->\n# behavior\n<!-- /skil:rule behavior -->\n'
+    );
+    fs.writeFile('.cursor/rules/behavior.mdc', '# behavior\n');
+    const bridge = createTestBridge(engine);
+
+    renderWithProviders(<RulesPanel />, { bridge });
+
+    expect(await screen.findByRole('listitem', { name: 'Rule behavior' })).toBeInTheDocument();
+    expect(screen.queryByText('Path-scoped')).not.toBeInTheDocument();
+  });
+
+  it('shows a health warning on a rule row named by a doctor finding', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile(
+      'AGENTS.md',
+      '<!-- skil:rule pair-programming/behavior -->\n# behavior\n<!-- /skil:rule pair-programming/behavior -->\n'
+    );
+    const bridge = createTestBridge(engine);
+    bridge.health = async () => ({
+      ok: true,
+      value: [
+        {
+          name: 'build',
+          tokenEstimate: 10,
+          warnCount: 1,
+          usedLlm: false,
+          findings: [{ type: 'secret', skillId: 'pair-programming/behavior', message: 'looks risky' }],
+        },
+      ],
+    });
+
+    renderWithProviders(<RulesPanel />, { bridge });
+
+    expect(await screen.findByLabelText('pair-programming/behavior has a health warning')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'pair-programming/behavior has a health warning' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Finding')).not.toBeInTheDocument();
+  });
+
+  it('opens the doctor modal from the rule preview warning banner', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile(
+      'AGENTS.md',
+      '<!-- skil:rule pair-programming/behavior -->\n---\ndescription: abcd\n---\n# behavior\n<!-- /skil:rule pair-programming/behavior -->\n'
+    );
+    const bridge = createTestBridge(engine);
+    bridge.health = async () => ({
+      ok: true,
+      value: [
+        {
+          name: 'build',
+          tokenEstimate: 10,
+          warnCount: 1,
+          usedLlm: false,
+          findings: [{ type: 'secret', skillId: 'pair-programming/behavior', message: 'looks risky' }],
+        },
+      ],
+    });
+
+    renderWithProviders(<RulesPanel />, { bridge });
+    await userEvent.click(await screen.findByRole('button', { name: 'Details for pair-programming/behavior' }));
+
+    const preview = await screen.findByRole('dialog', { name: 'pair-programming/behavior' });
+    expect(await within(preview).findByText(/token/)).toBeInTheDocument();
+    expect(within(preview).queryByText('Secret leak')).not.toBeInTheDocument();
+
+    await userEvent.click(within(preview).getByRole('button', { name: '1 warning' }));
+    const health = await screen.findByRole('dialog', { name: 'Health' });
+    expect(within(health).getByText('Secret leak')).toBeInTheDocument();
+    expect(within(health).getByText('looks risky')).toBeInTheDocument();
+  });
+
   it('opens a preview modal for a shared rule when its card is clicked', async () => {
     const { engine, fs } = createInMemoryWorkspace();
     fs.writeFile('AGENTS.md', '<!-- skil:rule behavior -->\n# Hello rule\n<!-- /skil:rule behavior -->\n');
@@ -52,6 +127,7 @@ describe('RulesPanel', () => {
     expect(await within(preview).findByRole('heading', { name: 'Hello rule' })).toBeInTheDocument();
     expect(preview).toHaveTextContent('AGENTS.md');
     expect(preview).toHaveTextContent('Shared law');
+    expect(within(preview).getByRole('button', { name: 'On', pressed: true })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Close details' }));
     expect(screen.queryByRole('dialog', { name: 'behavior' })).not.toBeInTheDocument();
