@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { err, isOk, ok, type Result } from '../core/result.js';
 import type { BrowseView, Skill } from '../types/index.js';
-import type { MarketSearchRow, ShelfRole } from './market-types.js';
+import type { MarketSearchRow, MarketSuggestedData, ShelfRole } from './market-types.js';
 
 export interface DiscoverHit {
   id: string;
@@ -22,6 +22,7 @@ export interface DiscoverPreview {
 
 export interface Discover {
   shelves(): Promise<Result<ShelfRole[]>>;
+  suggested(role?: string): Promise<Result<MarketSuggestedData>>;
   search(query: string): Promise<Result<DiscoverHit[]>>;
   preview(id: string): Promise<Result<DiscoverPreview>>;
   browse(view: BrowseView): Promise<Result<DiscoverHit[]>>;
@@ -46,6 +47,16 @@ export function createDiscover(opts: {
       try {
         const response = await get(`${base}/api/market/shelves`);
         return ok(response.data.data as ShelfRole[]);
+      } catch {
+        return err(new Error('store_error'));
+      }
+    },
+    async suggested(role?: string) {
+      try {
+        const response = await get(`${base}/api/market/suggested`, {
+          params: role ? { role } : undefined,
+        });
+        return ok(response.data.data as MarketSuggestedData);
       } catch {
         return err(new Error('store_error'));
       }
@@ -89,6 +100,7 @@ export function engineAsDiscover(engine: {
 }): Discover {
   return {
     shelves: async () => ok([]),
+    suggested: async () => ok({ updatedAt: '', roles: [] }),
     search: (query) => engine.search(query),
     preview: async () => err(new Error('unused')),
     browse: (view) => engine.browse(view),

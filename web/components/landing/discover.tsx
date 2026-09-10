@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, Check, Copy, GitBranch, Search, X } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { ArrowRight, Check, ChevronLeft, ChevronRight, Copy, GitBranch, Search } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { cn } from '@/lib/utils'
@@ -22,17 +23,28 @@ const BROWSE_TABS: Array<{ view: BrowseView; label: string }> = [
   { view: 'trending', label: 'Trending' },
 ]
 
+/** Same page size as the GUI Skills tab (`InboxPanel.tsx`). */
+const PAGE_SIZE = 25
+
 function formatInstalls(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}m`
   if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, '')}k`
   return String(value)
 }
 
-const AUDIT_STYLES: Record<MarketPreview['audit']['status'], string> = {
+/** Kept in sync with `gui/.../SkillPreviewDialog.tsx` audit labels + colors. */
+const AUDIT_LABEL: Record<MarketPreview['audit']['status'], string> = {
+  pass: 'Audit passed',
+  warn: 'Audit warning',
+  fail: 'Audit failed',
+  none: 'No audit',
+}
+
+const AUDIT_BADGE_CLASS: Record<MarketPreview['audit']['status'], string> = {
   pass: 'bg-emerald-500/15 text-emerald-500',
   warn: 'bg-amber-500/15 text-amber-500',
   fail: 'bg-destructive/15 text-destructive',
-  none: 'bg-muted text-muted-foreground',
+  none: 'bg-secondary text-muted-foreground',
 }
 
 type Row = { id: string; name: string; installs: number; rank?: number }
@@ -49,12 +61,25 @@ export function Discover() {
   const [searchResults, setSearchResults] = useState<MarketSearchRow[] | null>(null)
   const [isSearching, setIsSearching] = useState(false)
   const [searchError, setSearchError] = useState(false)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [previewSession, setPreviewSession] = useState<{ id: string; key: number } | null>(null)
+  const [page, setPage] = useState(0)
   const browseCache = useRef<Partial<Record<BrowseView, Row[]>>>({})
+
+  function openPreview(id: string) {
+    setPreviewSession((current) => ({
+      id,
+      key: current?.id === id ? current.key + 1 : 0,
+    }))
+  }
+
+  function closePreview() {
+    setPreviewSession(null)
+  }
 
   async function loadBrowse(view: BrowseView) {
     setBrowseView(view)
     setBrowseError(false)
+    setPage(0)
     const cached = browseCache.current[view]
     if (cached) {
       setBrowseRows(cached)
@@ -92,6 +117,7 @@ export function Discover() {
     setBrowseError(false)
     setActiveRole(r.slug)
     setActiveField(r.fields[0]?.slug ?? null)
+    setPage(0)
   }
 
   useEffect(() => {
@@ -119,8 +145,14 @@ export function Discover() {
     return field?.skills ?? []
   }, [searchResults, browseView, browseRows, field])
 
+  const pageCount = rows.length > 0 ? Math.ceil(rows.length / PAGE_SIZE) : 0
+  const safePage = pageCount === 0 ? 0 : Math.min(page, pageCount - 1)
+  const visibleStart = safePage * PAGE_SIZE
+  const visibleRows = rows.slice(visibleStart, visibleStart + PAGE_SIZE)
+
   async function runSearch(trimmed: string) {
     setSearchError(false)
+    setPage(0)
     if (trimmed.length === 0) {
       setSearchResults(null)
       return
@@ -228,7 +260,10 @@ export function Discover() {
                     type="button"
                     role="tab"
                     aria-selected={f.slug === activeField}
-                    onClick={() => setActiveField(f.slug)}
+                    onClick={() => {
+                      setActiveField(f.slug)
+                      setPage(0)
+                    }}
                     className={cn(
                       'chip-hover rounded-[var(--radius-hover)] px-3 py-1 text-xs font-medium transition-colors',
                       f.slug === activeField
@@ -250,32 +285,70 @@ export function Discover() {
         )}
 
         {roles !== null && !showSkeleton && !catalogError && (
-          <ul className="skill-list">
-            {rows.length === 0 && (
-              <li className="px-1 py-6 text-sm text-muted-foreground">No skills found.</li>
-            )}
-            {rows.map((skill, index) => (
-              <li key={skill.id} className="library-skill library-skill-interactive">
-                <button
-                  type="button"
-                  onClick={() => setSelectedId(skill.id)}
-                  className="flex w-full items-center gap-2.5 text-left"
+          <>
+            <ul className="skill-list">
+              {rows.length === 0 && (
+                <li className="px-1 py-6 text-sm text-muted-foreground">No skills found.</li>
+              )}
+              {visibleRows.map((skill, index) => (
+                <li
+                  key={skill.id}
+                  className="library-skill library-skill-interactive"
+                  onClick={() => openPreview(skill.id)}
                 >
-                  <span className="skill-rank">{skill.rank ?? index + 1}</span>
+                  <button
+                    type="button"
+                    className="library-skill-hit"
+                    onClick={() => openPreview(skill.id)}
+                    aria-haspopup="dialog"
+                    aria-label={`Details for ${skill.name}`}
+                  />
+                  <span className="skill-rank">{skill.rank ?? visibleStart + index + 1}</span>
                   <span className="skill-info block">
                     <span className="skill-name block">{skill.name}</span>
                   </span>
                   <span className="skill-actions">
                     <span className="skill-installs">{formatInstalls(skill.installs)}</span>
                   </span>
+                </li>
+              ))}
+            </ul>
+            {pageCount > 1 && (
+              <nav aria-label="Pages" className="page-row">
+                <button
+                  type="button"
+                  aria-label="Previous page"
+                  disabled={safePage === 0}
+                  onClick={() => setPage(safePage - 1)}
+                  className="page-nav-button"
+                >
+                  <ChevronLeft className="size-3.5" aria-hidden="true" />
                 </button>
-              </li>
-            ))}
-          </ul>
+                <span className="page-status">
+                  Page {safePage + 1} of {pageCount}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Next page"
+                  disabled={safePage === pageCount - 1}
+                  onClick={() => setPage(safePage + 1)}
+                  className="page-nav-button"
+                >
+                  <ChevronRight className="size-3.5" aria-hidden="true" />
+                </button>
+              </nav>
+            )}
+          </>
         )}
       </div>
 
-      {selectedId && <PreviewDialog id={selectedId} onClose={() => setSelectedId(null)} />}
+      {previewSession && (
+        <PreviewDialog
+          key={previewSession.key}
+          id={previewSession.id}
+          onClose={closePreview}
+        />
+      )}
     </section>
   )
 }
@@ -285,57 +358,6 @@ export function Discover() {
  * frontmatter block reads as garbled text if rendered as markdown. */
 function stripFrontmatter(markdown: string): string {
   return markdown.replace(/^---\n[\s\S]*?\n---\n?/, '').trim()
-}
-
-function SkillMarkdown({ content }: { content: string }) {
-  return (
-    <div className="flex flex-col gap-3 text-sm leading-relaxed">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          h1: ({ children }) => (
-            <h3 className="font-sans text-base font-semibold">{children}</h3>
-          ),
-          h2: ({ children }) => (
-            <h4 className="mt-1 font-sans text-sm font-semibold">{children}</h4>
-          ),
-          h3: ({ children }) => (
-            <h5 className="font-sans text-sm font-semibold">{children}</h5>
-          ),
-          p: ({ children }) => <p className="text-foreground/90">{children}</p>,
-          ul: ({ children }) => (
-            <ul className="ml-4 list-disc space-y-1 text-foreground/90">{children}</ul>
-          ),
-          ol: ({ children }) => (
-            <ol className="ml-4 list-decimal space-y-1 text-foreground/90">{children}</ol>
-          ),
-          a: ({ children, href }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-              className="text-[var(--accent-blue)] hover:underline"
-            >
-              {children}
-            </a>
-          ),
-          code: ({ children }) => (
-            <code className="rounded bg-background px-1 py-0.5 font-mono text-xs">
-              {children}
-            </code>
-          ),
-          pre: ({ children }) => (
-            <pre className="overflow-auto rounded-xl bg-background p-3 font-mono text-xs leading-relaxed">
-              {children}
-            </pre>
-          ),
-          hr: () => <hr className="border-[var(--glass-border)]" />,
-        }}
-      >
-        {stripFrontmatter(content)}
-      </ReactMarkdown>
-    </div>
-  )
 }
 
 function PreviewDialog({ id, onClose }: { id: string; onClose: () => void }) {
@@ -362,7 +384,10 @@ function PreviewDialog({ id, onClose }: { id: string; onClose: () => void }) {
 
   useEffect(() => {
     function handleKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      }
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
@@ -375,78 +400,75 @@ function PreviewDialog({ id, onClose }: { id: string; onClose: () => void }) {
     setTimeout(() => setCopied(false), 1500)
   }
 
-  return (
+  const title = preview?.name ?? id
+  const loading = !error && !preview
+
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="skill-details-backdrop"
       role="presentation"
-      onClick={onClose}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          event.preventDefault()
+          onClose()
+        }
+      }}
     >
       <div
+        className="skill-details-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={preview?.name ?? id}
+        aria-labelledby="skill-preview-title"
         onClick={(event) => event.stopPropagation()}
-        className="glass-modal flex max-h-[80vh] w-full max-w-xl flex-col overflow-hidden rounded-xl"
       >
-        <div className="flex items-center justify-between border-b border-[var(--glass-border)] px-5 py-4">
-          <p className="font-sans text-lg font-semibold">{preview?.name ?? id}</p>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close preview"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          {error && <StatusNotice kind="preview" onRetry={() => setReloadKey((key) => key + 1)} />}
-          {!error && !preview && <StatusSkeleton variant="preview" />}
-          {preview && (
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className={cn('rounded-full px-2.5 py-1 font-medium', AUDIT_STYLES[preview.audit.status])}>
-                  Audit: {preview.audit.status}
-                </span>
-                <span className="text-muted-foreground">{formatInstalls(preview.installs)} installs</span>
-                {preview.installUrl && (
-                  <a
-                    href={preview.installUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-[var(--accent-blue)] hover:underline"
-                  >
-                    <GitBranch className="size-3.5" /> Repository
-                  </a>
-                )}
-              </div>
-
-              {preview.skillMd && (
-                <div className="max-h-64 overflow-auto rounded-2xl bg-muted p-4">
-                  <SkillMarkdown content={preview.skillMd} />
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
+        <button type="button" className="modal-close" aria-label="Close details" onClick={onClose}>
+          <span aria-hidden="true">×</span>
+        </button>
+        <p className="eyebrow">Skill</p>
+        <h2 id="skill-preview-title">{title}</h2>
+        {error && <StatusNotice kind="preview" onRetry={() => setReloadKey((key) => key + 1)} />}
+        {loading && <StatusSkeleton variant="preview" />}
         {preview && (
-          <div className="flex items-center gap-2 border-t border-[var(--glass-border)] px-5 py-4">
-            <code className="flex-1 truncate rounded-xl bg-muted px-3 py-2 font-mono text-xs">
-              {preview.installCommand}
-            </code>
+          <div className="skill-meta-row">
+            <span className={`audit-badge ${AUDIT_BADGE_CLASS[preview.audit.status]}`}>
+              {AUDIT_LABEL[preview.audit.status]}
+            </span>
+            <span className="skill-installs">{formatInstalls(preview.installs)} installs</span>
+            {preview.installUrl && (
+              <a
+                href={preview.installUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="skill-details-link"
+              >
+                <GitBranch className="size-3.5" aria-hidden="true" />
+                <span>Repository</span>
+              </a>
+            )}
+          </div>
+        )}
+        {preview?.skillMd && (
+          <div className="skill-md-preview">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {stripFrontmatter(preview.skillMd)}
+            </ReactMarkdown>
+          </div>
+        )}
+        {preview && (
+          <div className="skill-copy-bar">
+            <code className="skill-copy-command">{preview.installCommand}</code>
             <button
               type="button"
               onClick={() => void handleCopy()}
               className="primary-button skill-copy-button"
             >
-              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              {copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

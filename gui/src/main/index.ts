@@ -10,7 +10,7 @@ import { createDiscover } from '../../../src/backend/discover.js';
 import type { ShelfRole } from '../../../src/backend/market-types.js';
 import { DiskWatch, watchFilesByParent } from '../../../src/watch/disk-watch.js';
 import type { ICollectionEngine } from '../../../src/interfaces/engine.js';
-import type { ScanResult } from '../../../src/types/index.js';
+import type { DriftAction, ScanResult } from '../../../src/types/index.js';
 import { err, isOk } from '../../../src/core/result.js';
 import { pingLlmChat } from '../../../src/llm/llm-chat.js';
 import type { LlmProvider } from '../../../src/llm/llm-chat.js';
@@ -257,6 +257,23 @@ ipcMain.handle(IPC_CHANNELS.adoptLeftovers, async (_event, ids?: string[]) => {
   muteOwnWrites();
   return result;
 });
+ipcMain.handle(IPC_CHANNELS.auditSync, () => currentEngine().auditSync());
+ipcMain.handle(IPC_CHANNELS.previewSync, (_event, path: string) => currentEngine().previewSync(path));
+ipcMain.handle(IPC_CHANNELS.importToCanonical, async (_event, ids: string[]) => {
+  const result = await currentEngine().importToCanonical(ids);
+  muteOwnWrites();
+  return result;
+});
+ipcMain.handle(IPC_CHANNELS.removeLeftovers, async (_event, paths: string[]) => {
+  const result = await currentEngine().removeLeftovers(paths);
+  muteOwnWrites();
+  return result;
+});
+ipcMain.handle(IPC_CHANNELS.resolveDrift, async (_event, id: string, action: DriftAction, path?: string) => {
+  const result = await currentEngine().resolveDrift(id, action, path);
+  muteOwnWrites();
+  return result;
+});
 ipcMain.handle(IPC_CHANNELS.health, () => currentEngine().health());
 ipcMain.handle(IPC_CHANNELS.hasLlmKey, () => hasLlmKey());
 ipcMain.handle(IPC_CHANNELS.saveLlmSettings, (_event, provider: LlmProvider, apiKey: string) => {
@@ -273,7 +290,9 @@ ipcMain.handle(IPC_CHANNELS.pingLlm, async () => {
   }
   return pingLlmChat(chat);
 });
-ipcMain.handle(IPC_CHANNELS.suggest, (_event, shelves: ShelfRole[]) => currentEngine().suggest(shelves));
+ipcMain.handle(IPC_CHANNELS.suggest, (_event, shelves: ShelfRole[], role?: string) =>
+  currentEngine().suggest(shelves, { role }),
+);
 
 // Brand icon (regenerate via scripts/generate-icons.mjs). out/main -> gui/resources.
 const APP_ICON = join(import.meta.dirname, '../../resources/icon.png');

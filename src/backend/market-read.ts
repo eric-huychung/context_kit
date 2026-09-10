@@ -1,16 +1,20 @@
 import { isOk } from '../core/result.js';
 import type { MarketSkillsClient } from './market-client.js';
+import { hydrateSuggestedPicks, loadMarketPicks } from './market-picks.js';
 import type { MarketStore } from './market-store.js';
 import { toSkillsAddSource } from './skills-add-source.js';
 
 /** Shelves change on a weekly cron, not per-request — cache for hours, not a day like the live browse proxy. */
 const SHELVES_CACHE_CONTROL = 'public, s-maxage=3600, stale-while-revalidate=1800';
+/** Editorial picks ship with the repo — same cadence as a deploy, not the weekly shelf cron. */
+const SUGGESTED_CACHE_CONTROL = 'public, s-maxage=3600, stale-while-revalidate=1800';
 /** Preview proxies live skills.sh calls (SKILL.md + audit) — short CDN cache, same idea as the live browse proxy but shorter since audits can change. */
 const PREVIEW_CACHE_CONTROL = 'public, s-maxage=300, stale-while-revalidate=60';
 
 const SEARCH_DEFAULT_LIMIT = 25;
 const SEARCH_MAX_LIMIT = 50;
 const STORE_UNAVAILABLE = 'Market index is temporarily unavailable.';
+const SUGGESTED_UNAVAILABLE = 'Suggested picks are temporarily unavailable.';
 
 export interface MarketReadDeps {
   store: MarketStore;
@@ -37,6 +41,28 @@ export async function handleShelvesRequest(_request: Request, deps: MarketReadDe
   }
 
   return Response.json({ data: result.value }, { headers: { 'Cache-Control': SHELVES_CACHE_CONTROL } });
+}
+
+/**
+ * Vercel Function handler for `GET /api/market/suggested?role=`. Returns
+ * editorial picks from `data/market-picks.yaml`, hydrated with name/installs
+ * from the stored index. Optional `role` returns one role block only.
+ */
+export async function handleSuggestedRequest(request: Request, deps: MarketReadDeps): Promise<Response> {
+  const role = new URL(request.url, 'http://localhost').searchParams.get('role') ?? undefined;
+  let picks;
+  try {
+    picks = loadMarketPicks();
+  } catch {
+    return Response.json({ error: 'config_error', message: SUGGESTED_UNAVAILABLE }, { status: 500 });
+  }
+
+  const result = await hydrateSuggestedPicks(deps.store, picks, role);
+  if (!isOk(result)) {
+    return Response.json({ error: 'store_error', message: STORE_UNAVAILABLE }, { status: 500 });
+  }
+
+  return Response.json({ data: result.value }, { headers: { 'Cache-Control': SUGGESTED_CACHE_CONTROL } });
 }
 
 function parseSearchLimit(raw: string | null): number {

@@ -4,6 +4,32 @@ All notable changes to skil are documented here. Versions follow [Semantic Versi
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-10
+
+Doctor, Suggest, and BYOK ship. Main stays deployable.
+
+### Added
+- `skil doctor` / GUI health strip: idle-cost, fat-body, unused, hash-split, and secret findings with no API key. Unused stays quiet until the project has usage and a 14-day grace has passed.
+- BYOK for Anthropic, OpenAI, or OpenRouter. GUI Settings tab encrypts the key on this machine (`safeStorage`). CLI reads `SKIL_LLM_PROVIDER` + `SKIL_LLM_API_KEY`. Direct to the provider — never through skil's servers.
+- With a key, doctor also flags skill-description conflicts and vague triggers.
+- `skil suggest --role` and Discover **Suggested**: editorial picks with no key (`data/market-picks.yaml`); LLM rerank against `package.json` when a key is set. Never installs.
+- `GET /api/market/suggested` hydrates those editorial ids from the market index.
+- Sync leftover cleanup: import missing ids, remove duplicate leftovers, resolve drift (keep-live vs import).
+- skil's own `SKILL.md` in the live pair, teaching the scan / file / enable / doctor / suggest / install loop.
+- Marketing site split into `/`, `/leaderboard`, `/cli`, `/app`.
+
+### Changed
+- Settings is a workspace tab, not a header gear.
+- Suggested no longer requires a key — no-key is editorial picks plus a note, not an error.
+
+### Fixed
+- Doctor unused warnings no longer fire on first download. Size caps match the documented 500-line / 20k-char fat-body rule.
+
+### Security
+- Doctor's LLM prompt redacts secret-shaped strings in skill descriptions and body excerpts before they leave the machine.
+- Public `/api/market/suggested` parse failures return a generic message (no yaml/path text).
+- Raw API keys never come back over IPC. `llm-settings.json` stays in Electron userData, not the repo.
+
 ## [0.4.0] - 2026-08-29
 
 Product is **live trees**. On/off is a path (park / restore), not “export to a dock.” skil writes only the `.agents` + `.claude` live pair.

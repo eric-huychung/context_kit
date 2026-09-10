@@ -214,13 +214,14 @@ describe('MarketDiscover', () => {
   });
 
   describe('Suggested tab', () => {
-    it('shows the connect-a-folder empty state and never calls suggest when no folder is bound', async () => {
+    it('still loads editorial picks when the market index is unavailable', async () => {
       const engine = createInMemoryEngine();
-      const suggest = vi.fn(async (): Promise<Result<SuggestResult>> => ok({ ids: [] }));
+      const suggest = vi.fn(async (): Promise<Result<SuggestResult>> =>
+        ok({ ids: ['obra/react-patterns'], usedLlm: false })
+      );
       const bridge = {
         ...createTestBridge(engine),
-        marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
-        getProjectRoot: async () => null,
+        marketShelves: async (): Promise<Result<ShelfRole[]>> => err(new Error('store_error')),
         suggest,
       };
 
@@ -229,38 +230,21 @@ describe('MarketDiscover', () => {
 
       await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
 
-      await waitFor(() => expect(screen.getByText('Connect a project folder')).toBeInTheDocument());
-      expect(suggest).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Add obra/react-patterns' })).toBeInTheDocument());
+      expect(suggest).toHaveBeenCalledWith([], 'swe');
     });
 
-    it('shows the no-key empty state with a working Settings link when a folder is bound but no key is saved', async () => {
+    it('loads editorial picks without a bound folder', async () => {
       const engine = createInMemoryEngine();
-      const onOpenSettings = vi.fn();
+      const suggest = vi.fn(async (): Promise<Result<SuggestResult>> =>
+        ok({ ids: ['obra/react-patterns'], usedLlm: false })
+      );
       const bridge = {
         ...createTestBridge(engine),
         marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
-        getProjectRoot: async () => '/tmp/test-project',
+        getProjectRoot: async () => null,
         hasLlmKey: async () => false,
-      };
-
-      renderWithProviders(<MarketDiscover onOpenSettings={onOpenSettings} />, { bridge });
-      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
-
-      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
-
-      await waitFor(() => expect(screen.getByText('No LLM key saved')).toBeInTheDocument());
-      await userEvent.click(screen.getByRole('button', { name: 'Open Settings' }));
-      expect(onOpenSettings).toHaveBeenCalledTimes(1);
-    });
-
-    it('shows a ranked shortlist with a working + when a folder and key are both present', async () => {
-      const engine = createInMemoryEngine();
-      const bridge = {
-        ...createTestBridge(engine),
-        marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
-        getProjectRoot: async () => '/tmp/test-project',
-        hasLlmKey: async () => true,
-        suggest: async (): Promise<Result<SuggestResult>> => ok({ ids: ['obra/react-patterns'] }),
+        suggest,
       };
 
       renderWithProviders(<MarketDiscover />, { bridge });
@@ -269,19 +253,84 @@ describe('MarketDiscover', () => {
       await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
 
       await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
+      expect(suggest).toHaveBeenCalledWith(SHELVES, 'swe');
+    });
+
+    it('refetches when the role dropdown changes', async () => {
+      const engine = createInMemoryEngine();
+      const suggest = vi.fn(async (_shelves, role): Promise<Result<SuggestResult>> =>
+        ok({ ids: [`pick-${role}`], usedLlm: false })
+      );
+      const bridge = {
+        ...createTestBridge(engine),
+        marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        suggest,
+      };
+
+      renderWithProviders(<MarketDiscover />, { bridge });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+      await waitFor(() => expect(screen.getByText('pick-swe')).toBeInTheDocument());
+
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Suggested role' }), 'pm');
+      await waitFor(() => expect(screen.getByText('pick-pm')).toBeInTheDocument());
+      expect(suggest).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows the no-key banner with a working Settings link but still lists picks', async () => {
+      const engine = createInMemoryEngine();
+      const onOpenSettings = vi.fn();
+      const bridge = {
+        ...createTestBridge(engine),
+        marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        hasLlmKey: async () => false,
+        suggest: async (): Promise<Result<SuggestResult>> =>
+          ok({ ids: ['obra/react-patterns'], usedLlm: false }),
+      };
+
+      renderWithProviders(<MarketDiscover onOpenSettings={onOpenSettings} />, { bridge });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+
+      await waitFor(() => expect(screen.getByText(/editorial picks only/i)).toBeInTheDocument());
+      expect(screen.getByText('obra/react-patterns')).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Open LLM settings' }));
+      expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows a ranked shortlist with a working + when a key is saved', async () => {
+      const engine = createInMemoryEngine();
+      const bridge = {
+        ...createTestBridge(engine),
+        marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        hasLlmKey: async () => true,
+        suggest: async (): Promise<Result<SuggestResult>> =>
+          ok({ ids: ['obra/react-patterns'], usedLlm: true }),
+      };
+
+      renderWithProviders(<MarketDiscover />, { bridge });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+
+      await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
+      expect(screen.queryByText(/editorial picks only/i)).not.toBeInTheDocument();
       await userEvent.click(screen.getByRole('button', { name: 'Add obra/react-patterns' }));
       await waitFor(() =>
         expect(screen.getByRole('button', { name: 'Added obra/react-patterns' })).toBeInTheDocument()
       );
     });
 
-    it('does not refetch when switching away and back with the same folder and key state', async () => {
+    it('does not refetch when switching away and back with the same role and key state', async () => {
       const engine = createInMemoryEngine();
-      const suggest = vi.fn(async (): Promise<Result<SuggestResult>> => ok({ ids: ['obra/react-patterns'] }));
+      const suggest = vi.fn(async (): Promise<Result<SuggestResult>> =>
+        ok({ ids: ['obra/react-patterns'], usedLlm: true })
+      );
       const bridge = {
         ...createTestBridge(engine),
         marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
-        getProjectRoot: async () => '/tmp/test-project',
         hasLlmKey: async () => true,
         suggest,
       };

@@ -117,6 +117,24 @@ function globRuleName(dir: string, path: string, ext: string): string {
   return relative.endsWith(ext) ? relative.slice(0, -ext.length) : relative;
 }
 
+/**
+ * Section id for a leftover rule file. `.cursor/rules/pair-programming/behavior.mdc`
+ * → `pair-programming/behavior`. `.codex/rules` / `.agents/rules` use `.md`.
+ */
+export function leftoverRuleId(path: string): string {
+  for (const [dir, { ext }] of Object.entries(GLOB_RULE_DIRS)) {
+    if (path === dir || path.startsWith(`${dir}/`)) {
+      return globRuleName(dir, path, ext);
+    }
+  }
+  for (const prefix of ['.codex/rules/', '.agents/rules/']) {
+    if (path.startsWith(prefix)) {
+      return path.slice(prefix.length).replace(/\.md$/i, '');
+    }
+  }
+  return path;
+}
+
 /** Path-scoped rule files, read-only. One row per file found under `GLOB_RULE_DIRS`. */
 export function collectGlobRules(fs: IFileSystemAdapter): Result<RuleRecord[]> {
   const rows: RuleRecord[] = [];
@@ -146,9 +164,12 @@ export function collectRules(fs: IFileSystemAdapter): Result<RuleRecord[]> {
   if (!isOk(glob)) {
     return glob;
   }
+  const sharedIds = new Set(shared.value.map((rule) => rule.id));
+  // Imported glob copies belong in Sync leftovers, not a second Rules row.
+  const visibleGlob = glob.value.filter((rule) => !sharedIds.has(rule.name));
   return ok([
     ...shared.value.sort((a, b) => a.id.localeCompare(b.id)),
-    ...glob.value.sort((a, b) => a.id.localeCompare(b.id)),
+    ...visibleGlob.sort((a, b) => a.id.localeCompare(b.id)),
   ]);
 }
 

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { err, isErr, isOk, ok } from './result.js';
-import { flattenShelfSkills, parsePackageDeps, rankByFingerprint, rerankWithLlm } from './suggest.js';
+import { parseMarketPicks } from '../backend/market-picks.js';
+import {
+  editorialShortlist,
+  filterShelvesByRole,
+  flattenShelfSkills,
+  parsePackageDeps,
+  rankByFingerprint,
+  rerankWithLlm,
+} from './suggest.js';
 import type { LlmChat } from '../llm/llm-chat.js';
 import type { ShelfRole } from '../backend/market-types.js';
 
@@ -44,6 +52,30 @@ describe('parsePackageDeps', () => {
 
   it('returns an empty list when both fields are missing', () => {
     expect(parsePackageDeps('{}')).toEqual([]);
+  });
+});
+
+describe('filterShelvesByRole', () => {
+  it('keeps only the matching role shelf nest', () => {
+    const filtered = filterShelvesByRole(SHELVES, 'swe');
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]?.slug).toBe('swe');
+  });
+});
+
+describe('editorialShortlist', () => {
+  it('returns file order minus ids already in the catalog', () => {
+    const picks = parseMarketPicks(`
+updatedAt: 2026-01-01
+picks:
+  swe: [a/one, a/two]
+  ui-ux: []
+  pm: []
+  data: []
+  agent: []
+  other: []
+`);
+    expect(editorialShortlist(picks, 'swe', new Set(['a/one']))).toEqual(['a/two']);
   });
 });
 

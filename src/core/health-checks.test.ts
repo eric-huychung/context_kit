@@ -124,6 +124,25 @@ describe('computeLlmFindings', () => {
     { skillId: 'testing/refactor', description: 'Use for refactoring code under test.', body: '# refactor\n' },
   ];
 
+  it('redacts secret-shaped strings before they are sent to the LLM', async () => {
+    const secret = 'sk-abcdefghijklmnopqrstuvwx';
+    let user = '';
+    const chat: LlmChat = {
+      complete: async (opts) => {
+        user = opts.user;
+        return ok('{"conflicts":[],"vague":[]}');
+      },
+    };
+
+    await computeLlmFindings(
+      [{ skillId: 'tdd', description: `Use ${secret}`, body: `key: ${secret}\n# rest` }],
+      chat,
+    );
+
+    expect(user).not.toContain(secret);
+    expect(user).toContain('[redacted]');
+  });
+
   it('returns no findings without calling the LLM when there are no filed skills', async () => {
     const chat: LlmChat = { complete: async () => err(new Error('should not be called')) };
 

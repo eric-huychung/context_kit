@@ -49,7 +49,7 @@ skil doctor build    # that command's findings, one line why each
 
 Runs entirely on math + regex, no API key required: **idle-cost** (long always-loaded descriptions), **fat-body** (oversized `SKILL.md`), **unused** (filed skill with no reads — only after this project has usage history and a 14-day grace), **hash-split** (a skill's live/leftover/parked copies disagree), **secret** (a vendor-key-shaped string in the body). Read-only — nothing is persisted or rewritten.
 
-Set `SKIL_LLM_PROVIDER` (`anthropic` | `openai` | `openrouter`) and `SKIL_LLM_API_KEY` in the environment (or save a key from the GUI's header gear) to unlock two more finding types automatically: **conflict** (two filed skills whose triggers overlap or contradict) and **vague-trigger** (a description too generic to reliably fire). No key means `skil doctor`'s output is unchanged — never a smaller/crippled report, just missing those two types.
+Set `SKIL_LLM_PROVIDER` (`anthropic` | `openai` | `openrouter`) and `SKIL_LLM_API_KEY` in the environment (or save a key on the GUI Settings tab) to unlock two more finding types automatically: **conflict** (two filed skills whose triggers overlap or contradict) and **vague-trigger** (a description too generic to reliably fire). No key means `skil doctor`'s output is unchanged — never a smaller/crippled report, just missing those two types.
 
 ## 5. Suggest — what to add next
 
@@ -57,7 +57,7 @@ Set `SKIL_LLM_PROVIDER` (`anthropic` | `openai` | `openrouter`) and `SKIL_LLM_AP
 skil suggest
 ```
 
-Fingerprints this project's `package.json` (deps + devDeps) against the market index, ranks shelf skills not already in the catalog, and — **only when an LLM key is set** — reranks that shortlist into ~15-20 ids most likely to match this stack. No key prints a clear message pointing at the same two env vars `doctor` uses; it never prints a stack trace. `suggest` only prints a shortlist — it never installs anything itself.
+Without a key, prints editorial picks for a role (`--role`, default `swe`) plus a note pointing at the same two env vars `doctor` uses. With a key, fingerprints this project's `package.json` and reranks into ~15-20 ids most likely to match this stack. Never prints a stack trace. `suggest` only prints a shortlist — it never installs anything itself.
 
 ## 6. Install — bring a market skill in
 
@@ -71,7 +71,7 @@ Installs straight into the live pair (`.agents/skills/<id>` **and** `.claude/ski
 
 ```bash
 skil scan                       # 1. see what's already here
-skil suggest                    # 2. (optional, needs a key) what's missing for this stack
+skil suggest                    # 2. editorial picks (LLM-reranks when a key is set)
 skil install obra/react-patterns
 skil create build --skills tdd  # 3. group into a command
 skil add build obra/react-patterns

@@ -7,15 +7,16 @@ import {
   MagnifyingGlass,
   ArrowClockwise,
   CircleNotch,
-  ToggleLeft,
-  ToggleRight,
 } from '@phosphor-icons/react';
 import { useBridge } from '../bridge-context';
 import { FOCUS_RING } from '../lib/focus-ring';
 import { groupInboxSkills, skillPathState } from '../lib/skill-sources';
-import type { OriginCheck, OriginStatus, ScanResult, SkillRecord } from '../../../shared/ipc';
+import { findingsForSkill } from '../lib/skill-health';
+import type { HealthReport, OriginCheck, OriginStatus, ScanResult, SkillRecord } from '../../../shared/ipc';
 import { StatusNotice, StatusSkeleton } from '../../../../../shared/status';
+import { HealthMark, rowsForSkill } from './HealthWarning';
 import SkillPreviewDialog from './SkillPreviewDialog';
+import SkillToggle from './SkillToggle';
 
 const PAGE_SIZE = 25;
 
@@ -30,54 +31,15 @@ function matchesQuery(skillId: string, query: string): boolean {
 
 const ORIGIN_BADGE: Record<OriginStatus, { label: string; className: string }> = {
   current: { label: 'Synced', className: 'origin-badge bg-emerald-500/15 text-emerald-500' },
-  update: { label: 'New copy', className: 'origin-badge bg-amber-500/15 text-amber-500' },
-  edited: { label: 'Edited', className: 'origin-badge bg-amber-500/15 text-amber-500' },
+  update: { label: 'Update', className: 'origin-badge bg-amber-500/15 text-amber-500' },
+  edited: { label: 'Edited', className: 'origin-badge bg-destructive/15 text-destructive' },
 };
-
-/**
- * On/off is a path, not a flag — read straight off `record.paths` via
- * `skillPathState`. Toggling is the write; there is nothing else to
- * confirm first. Hidden for a wishlist id with no catalog row yet.
- */
-function SkillToggle({
-  record,
-  busy,
-  onToggle,
-}: {
-  record: SkillRecord | undefined;
-  busy: boolean;
-  onToggle: () => void;
-}) {
-  if (!record) return null;
-  const on = skillPathState(record.paths) === 'on';
-  return (
-    <button
-      type="button"
-      className={`always-on-toggle ${on ? 'on' : 'off'} ${FOCUS_RING}`}
-      aria-pressed={on}
-      aria-busy={busy || undefined}
-      disabled={busy}
-      aria-label={on ? `Turn off ${record.id}` : `Turn on ${record.id}`}
-      onClick={(event: MouseEvent<HTMLButtonElement>) => {
-        event.stopPropagation();
-        onToggle();
-      }}
-    >
-      {on ? (
-        <ToggleRight size={18} weight="fill" aria-hidden="true" />
-      ) : (
-        <ToggleLeft size={18} weight="regular" aria-hidden="true" />
-      )}
-      {on ? 'On' : 'Off'}
-    </button>
-  );
-}
 
 export default function InboxPanel() {
   const bridge = useBridge();
   const [catalog, setCatalog] = useState<SkillRecord[] | null>(null);
   const [originById, setOriginById] = useState<Record<string, OriginStatus>>({});
-  const [flaggedIds, setFlaggedIds] = useState<Set<string>>(new Set());
+  const [healthReport, setHealthReport] = useState<HealthReport>([]);
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [canScan, setCanScan] = useState(false);
@@ -100,9 +62,8 @@ export default function InboxPanel() {
     setCatalog(nextCatalog);
     const checks: OriginCheck[] = nextChecks.ok ? nextChecks.value : [];
     setOriginById(Object.fromEntries(checks.map((check) => [check.skillId, check.status])));
-    setFlaggedIds(
-      new Set(nextHealth.ok ? nextHealth.value.flatMap((row) => row.findings.map((finding) => finding.skillId)) : [])
-    );
+    const report: HealthReport = nextHealth.ok ? nextHealth.value : [];
+    setHealthReport(report);
   }, [bridge]);
 
   useEffect(() => {
@@ -215,13 +176,16 @@ export default function InboxPanel() {
   async function handleToggle(skillId: string, enabled: boolean) {
     setToggleErrorId(null);
     setTogglingId(skillId);
-    const result = await bridge.setSkillEnabled(skillId, enabled);
-    setTogglingId(null);
-    if (!result.ok) {
-      setToggleErrorId(skillId);
-      return;
+    try {
+      const result = await bridge.setSkillEnabled(skillId, enabled);
+      if (!result.ok) {
+        setToggleErrorId(skillId);
+        return;
+      }
+      await refresh();
+    } finally {
+      setTogglingId(null);
     }
-    await refresh();
   }
 
   return (
@@ -311,12 +275,8 @@ export default function InboxPanel() {
                           {originBadge && (
                             <span className={originBadge.className}>{originBadge.label}</span>
                           )}
-                          {flaggedIds.has(skillId) && (
-                            <span className="finding-badge" aria-label={`${skillId} has a doctor finding`}>
-                              Finding
-                            </span>
-                          )}
                         </div>
+                        <HealthMark name={skillId} findings={findingsForSkill(healthReport, skillId)} />
                         {originById[skillId] === 'update' && (
                           <button
                             type="button"
@@ -381,6 +341,16 @@ export default function InboxPanel() {
           source={previewSource}
           paths={selectedRecord?.paths}
           originStatus={originById[selectedId]}
+          findings={rowsForSkill(selectedId, findingsForSkill(healthReport, selectedId))}
+          toggle={
+            <SkillToggle
+              record={selectedRecord}
+              busy={togglingId === selectedId}
+              onToggle={() =>
+                void handleToggle(selectedId, skillPathState(selectedRecord?.paths ?? []) !== 'on')
+              }
+            />
+          }
           lockDismiss={pendingUpdate !== null || pendingDelete !== null}
           onReset={
             originById[selectedId] === 'edited'

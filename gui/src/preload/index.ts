@@ -40,11 +40,16 @@ const bridge: SkilBridge = {
   setSharedRuleEnabled: (id, enabled) => ipcRenderer.invoke(IPC_CHANNELS.setSharedRuleEnabled, id, enabled),
   listLeftovers: () => ipcRenderer.invoke(IPC_CHANNELS.listLeftovers),
   adoptLeftovers: (ids) => ipcRenderer.invoke(IPC_CHANNELS.adoptLeftovers, ids),
+  auditSync: () => ipcRenderer.invoke(IPC_CHANNELS.auditSync),
+  previewSync: (path) => ipcRenderer.invoke(IPC_CHANNELS.previewSync, path),
+  importToCanonical: (ids) => ipcRenderer.invoke(IPC_CHANNELS.importToCanonical, ids),
+  removeLeftovers: (paths) => ipcRenderer.invoke(IPC_CHANNELS.removeLeftovers, paths),
+  resolveDrift: (id, action, path) => ipcRenderer.invoke(IPC_CHANNELS.resolveDrift, id, action, path),
   health: () => ipcRenderer.invoke(IPC_CHANNELS.health),
   hasLlmKey: () => ipcRenderer.invoke(IPC_CHANNELS.hasLlmKey),
   saveLlmSettings: (provider, apiKey) => ipcRenderer.invoke(IPC_CHANNELS.saveLlmSettings, provider, apiKey),
   pingLlm: () => ipcRenderer.invoke(IPC_CHANNELS.pingLlm),
-  suggest: (shelves) => ipcRenderer.invoke(IPC_CHANNELS.suggest, shelves),
+  suggest: (shelves, role) => ipcRenderer.invoke(IPC_CHANNELS.suggest, shelves, role),
 };
 
 contextBridge.exposeInMainWorld('skil', bridge);

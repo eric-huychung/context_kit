@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   COMMAND_DIR_BY_IDE,
   deprecatedPathFor,
+  isCanonicalHomePath,
   isDeprecatedPath,
   isLiveSkillPath,
   isParkedPath,
@@ -74,6 +75,14 @@ describe('live/parked/deprecated path helpers', () => {
     const leftover = '.cursor/skills/tdd';
     expect(isLiveSkillPath(leftover)).toBe(false);
     expect(isParkedPath(leftover)).toBe(false);
+  });
+
+  it('canonical homes are .agents, .claude, and AGENTS.md — leftover docks are not', () => {
+    expect(isCanonicalHomePath('AGENTS.md')).toBe(true);
+    expect(isCanonicalHomePath('.agents/skills/tdd')).toBe(true);
+    expect(isCanonicalHomePath('.claude/commands/build.md')).toBe(true);
+    expect(isCanonicalHomePath('.cursor/skills/tdd')).toBe(false);
+    expect(isCanonicalHomePath('.codex/rules/behavior.md')).toBe(false);
   });
 
   it('skillPathState: on needs both live roots, off is parked-only, leftover is anything else', () => {

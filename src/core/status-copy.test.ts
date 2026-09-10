@@ -20,5 +20,17 @@ describe('statusCopy', () => {
       detail: 'Try again in a moment.',
     });
     expect(statusLine('adopt')).toBe("Couldn't adopt those leftovers. Try again in a moment.");
+    expect(statusCopy('import')).toEqual({
+      title: "Couldn't import those paths",
+      detail: 'Try again in a moment.',
+    });
+    expect(statusCopy('leftover-remove')).toEqual({
+      title: "Couldn't remove those leftovers",
+      detail: 'Try again in a moment.',
+    });
+    expect(statusCopy('drift')).toEqual({
+      title: "Couldn't resolve that conflict",
+      detail: 'Try again in a moment.',
+    });
   });
 });

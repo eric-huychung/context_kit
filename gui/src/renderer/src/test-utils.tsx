@@ -223,6 +223,23 @@ export function createTestBridge(engine: ICollectionEngine, options: TestBridgeO
       if (result.ok) notifyScan(EMPTY_SCAN);
       return result;
     },
+    auditSync: async () => activeEngine.auditSync(),
+    previewSync: async (path) => activeEngine.previewSync(path),
+    importToCanonical: async (ids) => {
+      const result = await activeEngine.importToCanonical(ids);
+      if (result.ok) notifyScan(EMPTY_SCAN);
+      return result;
+    },
+    removeLeftovers: async (paths) => {
+      const result = await activeEngine.removeLeftovers(paths);
+      if (result.ok) notifyScan(EMPTY_SCAN);
+      return result;
+    },
+    resolveDrift: async (id, action, path) => {
+      const result = await activeEngine.resolveDrift(id, action, path);
+      if (result.ok) notifyScan(EMPTY_SCAN);
+      return result;
+    },
     health: async () => activeEngine.health(),
     hasLlmKey: async () => llmKeySaved,
     saveLlmSettings: async () => {
@@ -233,10 +250,7 @@ export function createTestBridge(engine: ICollectionEngine, options: TestBridgeO
       if (!llmKeySaved) return err(new Error('No LLM key saved yet.'));
       return options.pingResult ?? ok(undefined);
     },
-    suggest: async (shelves): Promise<Result<SuggestResult>> => {
-      if (!llmKeySaved) return err(new Error('NEED_KEY'));
-      return activeEngine.suggest(shelves);
-    },
+    suggest: async (shelves, role): Promise<Result<SuggestResult>> => activeEngine.suggest(shelves, { role }),
   };
 }
 

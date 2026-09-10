@@ -26,6 +26,7 @@ const SHELVES: ShelfRole[] = [
 function fakeDiscover(shelves = SHELVES): Discover {
   return {
     shelves: async () => ok(shelves),
+    suggested: async () => ok({ updatedAt: '', roles: [] }),
     search: async () => ok([]),
     preview: async () => err(new Error('unused')),
     browse: async () => ok([]),
@@ -44,16 +45,18 @@ describe('runSuggest', () => {
 
     expect(outcome.isError).toBe(false);
     expect(outcome.message).toContain('obra/react-patterns');
+    expect(outcome.message).not.toMatch(/editorial picks/i);
   });
 
-  it('prints a clear "no LLM key" message, not a stack trace, when no key is set', async () => {
+  it('prints editorial picks with a no-key note when no key is set', async () => {
     const engine = buildEngine();
 
     const outcome = await runSuggest(engine, fakeDiscover());
 
-    expect(outcome.isError).toBe(true);
-    expect(outcome.message).toMatch(/no llm key/i);
+    expect(outcome.isError).toBe(false);
+    expect(outcome.message).toMatch(/editorial picks/i);
     expect(outcome.message).toContain('SKIL_LLM_PROVIDER');
+    expect(outcome.message).toContain('mattpocock/skills/improve-codebase-architecture');
   });
 
   it('reports a friendly error when the market index fails to load', async () => {
@@ -66,10 +69,10 @@ describe('runSuggest', () => {
     expect(outcome.message).not.toContain('store_error');
   });
 
-  it('shows a friendly message when there are no suggestions', async () => {
+  it('shows a friendly message when a role has no editorial picks', async () => {
     const engine = buildEngine({ complete: async () => ok(JSON.stringify({ ids: [] })) });
 
-    const outcome = await runSuggest(engine, fakeDiscover([]));
+    const outcome = await runSuggest(engine, fakeDiscover(), { role: 'data' });
 
     expect(outcome.isError).toBe(false);
     expect(outcome.message).toMatch(/no suggestions/i);

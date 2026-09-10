@@ -1,9 +1,9 @@
 import type { Result } from '../../../src/core/result.js';
-import type { AdoptResult, BrowseView, Collection, CommandHealth, Finding, HealthReport, IDE, LeftoverRecord, OriginCheck, OriginStatus, RuleRecord, ScanResult, Skill, SkillRecord, SuggestResult, UsageRow } from '../../../src/types/index.js';
+import type { AdoptResult, BrowseView, Collection, CommandHealth, DriftAction, Finding, HealthReport, IDE, LeftoverRecord, OriginCheck, OriginStatus, RuleRecord, ScanResult, Skill, SkillRecord, SuggestResult, SyncAudit, SyncPreview, SyncRow, UsageRow } from '../../../src/types/index.js';
 import type { MarketSearchRow, ShelfRole } from '../../../src/backend/market-types.js';
 import type { LlmProvider } from '../../../src/llm/llm-chat.js';
 
-export type { AdoptResult, BrowseView, Collection, CommandHealth, Finding, HealthReport, IDE, LeftoverRecord, LlmProvider, MarketSearchRow, OriginCheck, OriginStatus, Result, RuleRecord, ScanResult, ShelfRole, Skill, SkillRecord, SuggestResult, UsageRow };
+export type { AdoptResult, BrowseView, Collection, CommandHealth, DriftAction, Finding, HealthReport, IDE, LeftoverRecord, LlmProvider, MarketSearchRow, OriginCheck, OriginStatus, Result, RuleRecord, ScanResult, ShelfRole, Skill, SkillRecord, SuggestResult, SyncAudit, SyncPreview, SyncRow, UsageRow };
 
 /**
  * Client-side shape of `GET /api/market/preview`'s `data` — not exported by
@@ -59,6 +59,11 @@ export const IPC_CHANNELS = {
   setSharedRuleEnabled: 'skil:set-shared-rule-enabled',
   listLeftovers: 'skil:list-leftovers',
   adoptLeftovers: 'skil:adopt-leftovers',
+  auditSync: 'skil:audit-sync',
+  previewSync: 'skil:preview-sync',
+  importToCanonical: 'skil:import-to-canonical',
+  removeLeftovers: 'skil:remove-leftovers',
+  resolveDrift: 'skil:resolve-drift',
   health: 'skil:health',
   hasLlmKey: 'skil:has-llm-key',
   saveLlmSettings: 'skil:save-llm-settings',
@@ -148,6 +153,15 @@ export interface SkilBridge {
   listLeftovers(): Promise<Result<LeftoverRecord[]>>;
   /** "Use ours and remove leftovers": copies missing ids into the live pair, then moves old paths to `.skil/deprecated/`. */
   adoptLeftovers(ids?: string[]): Promise<Result<AdoptResult>>;
+  /** Classify leftover paths into needs-import / ready-to-remove / drift. */
+  auditSync(): Promise<Result<SyncAudit>>;
+  /** Leftover vs live bodies for a conflict path. */
+  previewSync(path: string): Promise<Result<SyncPreview>>;
+  /** Copy into canonical homes without deleting the source. */
+  importToCanonical(ids: string[]): Promise<Result<AdoptResult>>;
+  /** Deprecate leftover paths only when canonical exists and hashes match. */
+  removeLeftovers(paths: string[]): Promise<Result<AdoptResult>>;
+  resolveDrift(id: string, action: DriftAction, path?: string): Promise<Result<AdoptResult>>;
   /**
    * Doctor pass. Math + regex findings always populate; conflict /
    * vague-trigger findings on a command also appear once a key is
@@ -165,11 +179,8 @@ export interface SkilBridge {
   /** 1-token call against the currently saved key. No saved key is an error. */
   pingLlm(): Promise<Result<void>>;
   /**
-   * Fingerprint + LLM-rerank a shortlist of market ids not already in the
-   * catalog. Requires a saved key — `Err('NEED_KEY')` otherwise. The
-   * Discover Suggestion tab gates this behind its own empty states so it
-   * is never called without a folder + key; `shelves` comes from
-   * `marketShelves()`, called by the caller, not fetched here.
+   * Editorial shortlist for `role` (default `swe`), or LLM-reranked shelf
+   * candidates when a key is saved. `shelves` comes from `marketShelves()`.
    */
-  suggest(shelves: ShelfRole[]): Promise<Result<SuggestResult>>;
+  suggest(shelves: ShelfRole[], role?: string): Promise<Result<SuggestResult>>;
 }

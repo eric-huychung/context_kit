@@ -130,6 +130,40 @@ export interface LeftoverRecord {
   path: string;
 }
 
+/** One non-canonical path classified for the Sync cleanup modal. */
+export type SyncRowKind = 'skill' | 'command' | 'rule';
+export type SyncRowStatus = 'needs-import' | 'ready-to-remove' | 'drift';
+export type DriftAction = 'keep-live' | 'import';
+
+export interface SyncRow {
+  kind: SyncRowKind;
+  id: string;
+  /** Non-canonical path (folder for skills, file for commands/rules). */
+  path: string;
+  canonicalPath?: string;
+  status: SyncRowStatus;
+  hashHere: string;
+  hashCanonical?: string;
+}
+
+/** Read-only leftover/drift classification. Counts are derived from `rows`. */
+export interface SyncAudit {
+  rows: SyncRow[];
+  readyCount: number;
+  driftCount: number;
+  needsImportCount: number;
+}
+
+/** Leftover vs live file bodies for a conflict preview. */
+export interface SyncPreview {
+  id: string;
+  kind: SyncRowKind;
+  leftoverPath: string;
+  leftoverBody: string;
+  canonicalPath: string;
+  canonicalBody: string;
+}
+
 /** Outcome of `adoptLeftovers()`. */
 export interface AdoptResult {
   /** Catalog ids copied into the live pair because they were missing there. */
@@ -141,7 +175,9 @@ export interface AdoptResult {
 /**
  * One `health()` warning about a filed skill. Math/regex types
  * (`idle-cost`, `fat-body`, `unused`, `hash-split`, `secret`) never
- * require an LLM key. `conflict` / `vague-trigger` are Phase 2, added
+ * require an LLM key. Unused needs project-level usage evidence and a
+ * 14-day grace; 0 reads on a fresh install is not a warning.
+ * `conflict` / `vague-trigger` are Phase 2, added
  * only when an `LlmChat` is injected.
  */
 export interface Finding {
@@ -166,13 +202,14 @@ export interface CommandHealth {
 export type HealthReport = CommandHealth[];
 
 /**
- * `suggest()`'s return shape: an ordered id shortlist (~15-20), fingerprint-
- * ranked against `package.json` deps and the existing catalog, then LLM-
- * reranked. Ids only — the caller already has shelf name/installs data to
- * display a row.
+ * `suggest()`'s return shape: an ordered id shortlist (~15-20). Without a
+ * key this is the editorial list from `data/market-picks.yaml`; with a key
+ * the LLM reranks role-filtered shelf candidates against `package.json`.
+ * Ids only — the caller hydrates name/installs for display.
  */
 export interface SuggestResult {
   ids: string[];
+  usedLlm: boolean;
 }
 
 /** Outcome of `scan()` — pull. */

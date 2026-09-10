@@ -77,7 +77,7 @@ We wrap skills.sh (via skil's OIDC backend) and `npx skills add`. We do not host
 34. As a scripting user, I want the CLI to read `SKIL_LLM_PROVIDER` / `SKIL_LLM_API_KEY` from the environment, so `skil doctor` gets the LLM slice too without a config file
 35. As a developer, I want my key stored encrypted on my machine and sent only direct to the provider, so it never touches skil's servers or gets written in the clear to disk
 36. As a developer, I want a Suggested tab in Discover that ranks market skills against my project's `package.json`, so I see what's missing for this stack instead of browsing the whole index by hand
-37. As a developer with no folder connected or no LLM key saved, I want the Suggested tab to tell me exactly what's missing (connect a folder, or add a key in Settings) instead of an empty list or a crash
+37. As a developer with no folder connected, I want the Suggested tab to tell me to connect a folder; with a folder but no LLM key, I want editorial picks plus a Settings warning, not an empty list or a crash
 38. As a scripting user, I want `skil suggest` to print the same shortlist as the GUI, so I can see suggestions without opening the app
 39. As a developer using an AI coding agent, I want skil's own `SKILL.md` so my agent already knows the scan/file/enable/disable/doctor/suggest/install loop without me re-explaining it every session
 
@@ -103,7 +103,7 @@ We wrap skills.sh (via skil's OIDC backend) and `npx skills add`. We do not host
 
 ### Market index (Discover backend, separate track — shipped through Phase 4)
 
-Discover's browse/search today hits skills.sh live via `SkillsAdapter`. The **market index** is a curated Supabase copy (~20k skills), nested role → category → top 30 by installs. It is **not** the engine catalog (`skills[]` in `.skil/state.json`). Roles and fields are rows (`market_roles` / `market_fields`), not a schema cap of 20. Full spec: `tasks/plan.md`; tasks: `tasks/todo.md`; module boundary: `docs/design/market-index.md`.
+Discover's browse/search today hits skills.sh live via `SkillsAdapter`. The **market index** is a curated Supabase copy (~20k skills), nested role → category → top 30 by installs. It is **not** the engine catalog (`skills[]` in `.skil/state.json`). Roles and fields are rows (`market_roles` / `market_fields`), not a schema cap of 20. Spec and module boundary: `docs/design/market-index.md`. Upcoming work lives in `tasks/plan.md` / `tasks/todo.md`.
 
 **List vs preview:** shelf and search rows are id, name, installs (rank on shelves only). Click-through preview is live SKILL.md + audit — bodies are never stored.
 
@@ -151,17 +151,15 @@ v6 `skills[]` loads as-is; a leftover `inbox` array on disk is ignored, not migr
 - `skil delete <name>` — drop the command (and its live/parked folders)
 - `skil list`
 - `skil add <command> <skillId>` / `skil remove <command> <skillId>` — write-through `## Skills` on a live command only
-- `skil enable <skillId>` / `skil disable <skillId>` — copy to the live pair, or park it (re-fetches on enable if a market skill's parked copy is gone)
-- `skil enable --command <name>` / `skil disable --command <name>` — same, for a command's own folders; refuses on a name collision
+- `skil enable <command>` / `skil disable <command>` — write the command as a human-only skill, or park it; refuses on a name collision
 - `skil rules` / `rules show <id>` / `rules enable <id>` / `rules disable <id>` — list shared + glob rules, read a body, toggle a shared-law `AGENTS.md` section
-- `skil leftovers` / `skil adopt [ids...]` — list leftover paths, then copy-into-live + move-to-deprecated
 - `skil usage` — print use counts
 - `skil doctor [name]` — findings table (token-ish cost + warn count per command), or one command's findings with a one-line why each; math + regex always (idle-cost >500 chars, fat-body >500 lines / 20k chars, unused only after Claude usage evidence + 14-day grace), plus `conflict` / `vague-trigger` when a BYOK key is set
 - `skil suggest` — shortlist ~15-20 market ids matching this project's `package.json` stack; needs a BYOK key (clear "no LLM key" message otherwise, no stack trace); never installs
 - `skil search [query] [--trending]`
 - `skil install <skillId>` — market install straight to the live pair; no `--to`
 
-No verb takes `--to <dock>`, `--from`, `copy`, or `export`. BYOK has no dedicated verb — set `SKIL_LLM_PROVIDER` (`anthropic` | `openai` | `openrouter`) and `SKIL_LLM_API_KEY` in the environment and `skil doctor` picks it up automatically.
+No verb takes `--to <dock>`, `--from`, `copy`, or `export`. **GUI-only for now** (same as `docs/design/architecture.md`): per-skill `enable`/`disable` (`setSkillEnabled`) and `leftovers` / `adopt` (`leftovers`, `adoptLeftovers`). BYOK has no dedicated verb — set `SKIL_LLM_PROVIDER` (`anthropic` | `openai` | `openrouter`) and `SKIL_LLM_API_KEY` in the environment and `skil doctor` picks it up automatically.
 
 Bin is `skil`. `contextkit` stays as an alias so old scripts work. The product name is skil.
 
@@ -173,9 +171,9 @@ API origin: `SKIL_API_URL`, then `CONTEXTKIT_API_URL`, then `website.json`.
 - Skills tab (was Inbox): the whole catalog, 25 per page, search, click a row to preview `SKILL.md` (disk body + every path — live/leftover/parked — for catalog ids; market preview for Discover-only ids), toggle per row (`setSkillEnabled`). Groups **Market** (`source: 'skills.sh'`) vs **Project** (`source: 'local'`) — a filter, not two states a skill gets stuck between. Delete is preview-only and hard-deletes live + parked copies (confirm lists the paths). Project rows with a market origin show a **Synced** / **Edited** / **New copy** badge (color + label). **Update** only when the disk copy still matches `originHash` and the live market SKILL.md moved. Edited copies get **Reset to market** (purple) in preview; the confirm stacks above the preview. No auto-sync. No Scan icon; refreshes from `onScan`.
 - Commands tab: **one list**. Create, file from Skills, remove skill, delete command, and a **toggle** per row (`setCommandEnabled`). No dock chips, no Export button, no IDE cards, no per-dock command files — toggling on writes the human-only skill folder into both live trees directly. Filed skills show Claude read counts from `usage()`. Each row and the detail panel show a `health()` strip (token-ish number + warn count, no key required); clicking in shows the findings list, and Disable/Remove on a finding confirm before reusing the existing `setSkillEnabled(false)` / `removeSkill` calls. Skills and Rules rows get a small "Finding" badge when their id is named in any finding.
 - Rules tab: shared-law rows (one `AGENTS.md` section each) get a toggle (`setSharedRuleEnabled`). Glob rows (`.cursor/rules/*.mdc`, etc.) are listed read-only — no toggle, no export. Click a row to preview the body. Does not create rules.
-- Settings (header gear, no tab): provider select (`anthropic` / `openai` / `openrouter`), an API key field, one "Save + Test" button (`saveLlmSettings` then `pingLlm`). Shows "Key saved" / "No key saved" from `hasLlmKey()`. The key is encrypted (`safeStorage`) before it is written to disk and the renderer never reads it back — only booleans and `Result<void>`. Saving rebinds the session's engine so `health()` picks up the new key immediately.
+- Settings (workspace tab): provider select (`anthropic` / `openai` / `openrouter`), an API key field, one "Save + Test" button (`saveLlmSettings` then `pingLlm`). Shows "Key saved" / "No key saved" from `hasLlmKey()`. The key is encrypted (`safeStorage`) before it is written to disk and the renderer never reads it back — only booleans and `Result<void>`. Saving rebinds the session's engine so `health()` picks up the new key immediately.
 - Discover: one nest on Landing and GUI — live Top / Trending, then market index role → category, plus search + preview (`MarketDiscover.tsx` / `discover.tsx`). Empty or failed shelves stay on that nest and default to Top. GUI `+` calls `bridge.install(skillId)` directly. No project re-scan control.
-- Discover's third chip, **Suggested**, runs only when selected, not on every Discover visit: no bound folder → connect-a-folder prompt (no network call); folder bound but no LLM key → "No LLM key" message with a button to Settings; both present → `bridge.marketShelves()` then `bridge.suggest(shelves)` render as a plain row list with a preview and a per-row `+` (`bridge.install`), same as Top/Trending — no "Add all". Switching tabs and back does not refetch unless the folder or key state actually changed.
+- Discover's **Suggested** chip runs only when selected, not on every Discover visit: no bound folder → connect-a-folder prompt (no network call); folder bound → editorial picks for the chosen role (`bridge.suggest`), with a warning + Settings link when no LLM key is saved. With a key, the same tab LLM-reranks against `package.json`. Same per-row `+` as Top/Trending — no "Add all".
 - Discover / Skills / Commands / Rules do not require a folder. Scan needs a connected repo (header Re-scan, Sync pick, or CLI cwd).
 - Pick folder on Sync scans once and binds. Header Re-scan is the explicit pull after that. Watcher also scans after debounce. There is no Scan-without-folder modal.
 - **There is no push control.** No Export / Copy button, no dock picker, anywhere in the renderer — a toggle (or Discover's `+`) **is** the write. `bridge.install` (Discover `+` only), `setSkillEnabled` / `setCommandEnabled` / `setSharedRuleEnabled` / `leftovers` / `adoptLeftovers`, and `saveLlmSettings` (Settings' Save) are the only mutating bridge calls; `copyTo` / `copyAll` / `exportCommand` / `exportAll` / `exportRules` / `importFrom` don't exist on the engine at all anymore — removed outright by the live-trees pivot, not just hidden from the bridge (see `docs/design/decisions.md`).
@@ -236,7 +234,8 @@ API origin: `SKIL_API_URL`, then `CONTEXTKIT_API_URL`, then `website.json`.
 ## Open Questions
 
 - Package name in this repo is `skil`. Confirm the name is free on npm before publish.
-- Confirm Cursor in this repo's world actually reads `.agents/skills` and `AGENTS.md` before Task 10's GUI polish — that is the kill-risk for the whole pivot (see `tasks/plan.md` Risks).
+- One skill on many commands — the map allows it; the GUI files from Skills only.
+- Parked is the last live snapshot at toggle-off time. No merge if the parked copy goes stale against the map while off. Revisit if it matters in practice. Team YAML sync stays undesigned this phase (no `.skil.yml`).
 
 ### Success Metrics
 

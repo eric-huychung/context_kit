@@ -1,0 +1,23 @@
+# Weekly editorial picks for Discover → Suggested. Order = display rank.
+# Run `npm test -- src/backend/market-picks.test.ts` after edits.
+updatedAt: 2026-03-09
+
+picks:
+  agent:
+    - mattpocock/skills/grill-me
+    - mattpocock/skills/grill-with-docs
+  swe:
+    - mattpocock/skills/improve-codebase-architecture
+    - mattpocock/skills/tdd
+    - mattpocock/skills/codebase-design
+    - mattpocock/skills/git-guardrails-claude-code
+    - mattpocock/skills/code-review
+    - vercel-labs/agent-skills/vercel-react-best-practices
+  ui-ux:
+    - anthropics/skills/frontend-design
+    - nextlevelbuilder/ui-ux-pro-max-skill/ui-ux-pro-max
+  pm:
+    - mattpocock/skills/to-prd
+    - mattpocock/skills/to-issues
+  data: []
+  other: []

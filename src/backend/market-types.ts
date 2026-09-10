@@ -59,6 +59,25 @@ export interface ShelfRole {
   fields: ShelfField[];
 }
 
+/** Editorial picks file shape (`data/market-picks.yaml`). */
+export interface MarketPicksFile {
+  updatedAt: string;
+  picks: Record<string, string[]>;
+}
+
+/** One role block from `GET /api/market/suggested` — editorial picks hydrated from the index. */
+export interface SuggestedRole {
+  slug: string;
+  label: string;
+  skills: ShelfSkill[];
+}
+
+/** Editorial shortlist grouped by role. Ids come from `data/market-picks.yaml`. */
+export interface MarketSuggestedData {
+  updatedAt: string;
+  roles: SuggestedRole[];
+}
+
 /** One row from the classify pool (`listTopListings`). Description is the stored search excerpt, not SKILL.md. */
 export interface MarketClassifyRow {
   id: string;

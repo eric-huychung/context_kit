@@ -159,8 +159,22 @@ function llmFindingsSystemPrompt(): string {
   ].join(' ');
 }
 
+/** Strip vendor-key-shaped strings so doctor never ships secrets to the BYOK provider. */
+function redactSecrets(text: string): string {
+  let out = text;
+  for (const pattern of SECRET_PATTERNS) {
+    const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+    out = out.replace(new RegExp(pattern.source, flags), '[redacted]');
+  }
+  return out;
+}
+
 function toPromptSkill(skill: LlmFindingsSkillInput): { id: string; description: string; bodyExcerpt: string } {
-  return { id: skill.skillId, description: skill.description, bodyExcerpt: skill.body.slice(0, BODY_EXCERPT_CHARS) };
+  return {
+    id: skill.skillId,
+    description: redactSecrets(skill.description),
+    bodyExcerpt: redactSecrets(skill.body).slice(0, BODY_EXCERPT_CHARS),
+  };
 }
 
 function parseLlmFindings(content: string, knownIds: ReadonlySet<string>): Finding[] {
@@ -211,6 +225,7 @@ function parseLlmFindings(content: string, knownIds: ReadonlySet<string>): Findi
  * injected. A network/parse failure returns an `Err` so the caller can
  * leave `usedLlm: false` and keep the report Phase-1-shaped — a bad key
  * degrades silently here; `pingLlm` is where it surfaces clearly.
+ * Secret-shaped strings are redacted from the prompt before the call.
  */
 export async function computeLlmFindings(skills: LlmFindingsSkillInput[], llmChat: LlmChat): Promise<Result<Finding[]>> {
   if (skills.length === 0) {

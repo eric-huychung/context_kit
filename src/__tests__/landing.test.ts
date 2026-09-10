@@ -119,4 +119,18 @@ describe('landing page', () => {
     expect(vercel).toContain('"outputDirectory": "web/out"');
     expect(existsSync(join(publicDir, 'index.html'))).toBe(false);
   });
+
+  it('paginates the leaderboard and uses the GUI row-hit + portal preview pattern', () => {
+    const discover = readWeb('components/landing/discover.tsx');
+    const webGlobals = readWeb('app/globals.css');
+    expect(discover).toContain('const PAGE_SIZE = 25');
+    expect(discover).toContain('library-skill-hit');
+    expect(discover).toContain('createPortal');
+    expect(discover).toContain('skill-details-modal');
+    expect(discover).toContain('skill-md-preview');
+    expect(discover).toContain('aria-label="Pages"');
+    expect(discover).toContain('Page {safePage + 1} of {pageCount}');
+    expect(webGlobals).toContain('.skill-details-modal');
+    expect(webGlobals).toContain('width: min(94vw, 960px)');
+  });
 });

@@ -1,11 +1,27 @@
 import { cloneElement, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactElement, type ReactNode } from 'react';
-import { CaretDown, CaretLeft, CaretRight, Check, Plus, ToggleLeft, ToggleRight, Trash, X } from '@phosphor-icons/react';
+import {
+  CaretDown,
+  CaretLeft,
+  CaretRight,
+  Check,
+  CircleNotch,
+  Plus,
+  ToggleLeft,
+  ToggleRight,
+  Trash,
+  X,
+} from '@phosphor-icons/react';
 import { useBridge } from '../bridge-context';
 import { FOCUS_RING } from '../lib/focus-ring';
 import { conflictLabels, isCommandNameCollision } from '../lib/command-conflicts';
 import { statusLine } from '../../../../../shared/status';
 import { groupCommandsByStage } from '../lib/sdlc';
-import type { Collection, CommandHealth, Finding } from '../../../shared/ipc';
+import { findingsForSkill, formatTokenCount } from '../lib/skill-health';
+import { skillPathState } from '../lib/skill-sources';
+import type { Collection, CommandHealth, SkillRecord } from '../../../shared/ipc';
+import { HealthBanner, HealthMark, rowsForSkill } from './HealthWarning';
+import SkillPreviewDialog from './SkillPreviewDialog';
+import SkillToggle from './SkillToggle';
 
 const INBOX_PAGE_SIZE = 10;
 
@@ -42,147 +58,29 @@ function CommandToggle({
         onToggle();
       }}
     >
-      {on ? (
+      {busy ? (
+        <CircleNotch size={18} weight="regular" className="spin" aria-hidden="true" />
+      ) : on ? (
         <ToggleRight size={18} weight="fill" aria-hidden="true" />
       ) : (
         <ToggleLeft size={18} weight="regular" aria-hidden="true" />
       )}
-      {on ? 'On' : 'Off'}
+      {busy ? null : on ? 'On' : 'Off'}
     </button>
-  );
-}
-
-/** Doctor's always-available math+regex numbers — no LLM key required. Hidden until `health()` resolves. */
-function HealthStrip({ health }: { health: CommandHealth | undefined }) {
-  if (!health) return null;
-  return (
-    <span
-      className={`health-strip ${health.warnCount > 0 ? 'has-warnings' : ''}`}
-      aria-label={`${health.tokenEstimate} tokens, ${health.warnCount} warning${health.warnCount === 1 ? '' : 's'}`}
-    >
-      {health.tokenEstimate} tok · {health.warnCount} warn
-    </span>
-  );
-}
-
-/**
- * Findings are read-only report data — the two actions here are the
- * engine's existing `setSkillEnabled(false)` / `removeSkill`, confirm-gated
- * so a doctor finding never silently mutates the map.
- */
-function HealthFindings({
-  commandName,
-  findings,
-  onChange,
-}: {
-  commandName: string;
-  findings: Finding[];
-  onChange: () => void;
-}) {
-  const bridge = useBridge();
-  const [pending, setPending] = useState<{ finding: Finding; action: 'disable' | 'remove' } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  if (findings.length === 0) {
-    return null;
-  }
-
-  async function handleConfirm() {
-    if (!pending) return;
-    setError(null);
-    const result =
-      pending.action === 'disable'
-        ? await bridge.setSkillEnabled(pending.finding.skillId, false)
-        : await bridge.removeSkillFromCollection(commandName, pending.finding.skillId);
-    if (!result.ok) {
-      setError(statusLine(pending.action === 'disable' ? 'enable' : 'delete'));
-      setPending(null);
-      return;
-    }
-    setPending(null);
-    onChange();
-  }
-
-  return (
-    <div className="active-skills health-findings">
-      <div className="subheading">
-        <span>Health findings</span>
-        <span className="count-pill">{findings.length}</span>
-      </div>
-      {error && (
-        <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      <ul className="finding-list">
-        {findings.map((finding, index) => (
-          <li key={`${finding.type}-${finding.skillId}-${index}`} className="finding-row">
-            <div className="finding-info">
-              <span className="finding-type">{finding.type}</span>
-              <span className="muted-copy">
-                {finding.skillId}: {finding.message}
-              </span>
-            </div>
-            <div className="finding-actions">
-              <button
-                type="button"
-                className={`outline-button ${FOCUS_RING}`}
-                onClick={() => setPending({ finding, action: 'disable' })}
-              >
-                Disable
-              </button>
-              <button
-                type="button"
-                className={`outline-button ${FOCUS_RING}`}
-                onClick={() => setPending({ finding, action: 'remove' })}
-              >
-                Remove
-              </button>
-            </div>
-          </li>
-        ))}
-      </ul>
-
-      {pending && (
-        <div className="modal-backdrop" role="presentation" onClick={() => setPending(null)}>
-          <div
-            className="help-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="finding-confirm-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <p className="eyebrow">Health</p>
-            <h2 id="finding-confirm-title">
-              {pending.action === 'disable'
-                ? `Disable ${pending.finding.skillId}?`
-                : `Remove ${pending.finding.skillId} from ${commandName}?`}
-            </h2>
-            <p className="muted-copy">This cannot be undone.</p>
-            <div className="modal-actions">
-              <button type="button" className={`outline-button ${FOCUS_RING}`} onClick={() => setPending(null)}>
-                Cancel
-              </button>
-              <button type="button" className={`primary-button ${FOCUS_RING}`} onClick={() => void handleConfirm()}>
-                {pending.action === 'disable' ? 'Disable skill' : 'Remove skill'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
   );
 }
 
 function CollectionDetail({
   collection,
   inbox,
+  skillCatalog,
   health,
   onChange,
   onDeleted,
 }: {
   collection: Collection;
   inbox: string[];
+  skillCatalog: SkillRecord[];
   health: CommandHealth | undefined;
   onChange: () => void;
   onDeleted: () => void;
@@ -195,7 +93,11 @@ function CollectionDetail({
   const [inboxPage, setInboxPage] = useState(0);
   const [usageCounts, setUsageCounts] = useState<Record<string, number>>({});
   const [toggling, setToggling] = useState(false);
+  const [togglingSkill, setTogglingSkill] = useState<string | null>(null);
+  const [previewSkillId, setPreviewSkillId] = useState<string | null>(null);
   const inboxPickerId = `inbox-picker-${collection.name}`;
+  const previewRecord = previewSkillId ? skillCatalog.find((skill) => skill.id === previewSkillId) : undefined;
+  const previewSource = previewRecord && previewRecord.paths.length > 0 ? 'local' : 'market';
 
   useEffect(() => {
     let cancelled = false;
@@ -240,20 +142,38 @@ function CollectionDetail({
     onChange();
   }
 
+  async function handleSkillToggle(skillId: string, enabled: boolean) {
+    setError(null);
+    setTogglingSkill(skillId);
+    try {
+      const result = await bridge.setSkillEnabled(skillId, enabled);
+      if (!result.ok) {
+        setError(statusLine('enable'));
+        return;
+      }
+      onChange();
+    } finally {
+      setTogglingSkill(null);
+    }
+  }
+
   async function handleToggle() {
     setError(null);
     setToggling(true);
-    const result = await bridge.setCommandEnabled(collection.name, !collection.enabled);
-    setToggling(false);
-    if (!result.ok) {
-      setError(
-        isCommandNameCollision(result)
-          ? `Can't turn on /${collection.name}: ${conflictLabels(result).join(', ')} already exists and isn't ours to manage.`
-          : statusLine('enable')
-      );
-      return;
+    try {
+      const result = await bridge.setCommandEnabled(collection.name, !collection.enabled);
+      if (!result.ok) {
+        setError(
+          isCommandNameCollision(result)
+            ? `Can't turn on /${collection.name}: ${conflictLabels(result).join(', ')} already exists and isn't ours to manage.`
+            : statusLine('enable')
+        );
+        return;
+      }
+      await onChange();
+    } finally {
+      setToggling(false);
     }
-    onChange();
   }
 
   async function handleDelete() {
@@ -279,16 +199,23 @@ function CollectionDetail({
           </p>
         </div>
         <div className="detail-actions">
-          <HealthStrip health={health} />
           <CommandToggle collection={collection} busy={toggling} onToggle={() => void handleToggle()} />
-          <button
-            type="button"
-            onClick={() => setConfirmDelete(true)}
-            aria-label={`Delete ${collection.name}`}
-            className={`delete-card detail-delete ${FOCUS_RING}`}
-          >
-            <Trash size={16} weight="regular" aria-hidden="true" />
-          </button>
+          <div className="detail-action-row">
+            {health && <p className="health-token">{formatTokenCount(health.tokenEstimate)}</p>}
+            <HealthBanner
+              name={collection.name}
+              findings={health?.findings ?? []}
+              tokenEstimate={health?.tokenEstimate}
+            />
+            <button
+              type="button"
+              onClick={() => setConfirmDelete(true)}
+              aria-label={`Delete ${collection.name}`}
+              className={`delete-card detail-delete ${FOCUS_RING}`}
+            >
+              <Trash size={16} weight="regular" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -305,15 +232,26 @@ function CollectionDetail({
         </div>
         {collection.skills.length === 0 && <p className="muted-copy">No skills in this command yet</p>}
         {collection.skills.map((skillId) => (
-          <div className="included-skill" key={skillId}>
+          <div className="included-skill library-skill-interactive" key={skillId}>
+            <button
+              type="button"
+              className={`library-skill-hit ${FOCUS_RING}`}
+              onClick={() => setPreviewSkillId(skillId)}
+              aria-haspopup="dialog"
+              aria-label={`Details for ${skillId}`}
+            />
             <span>{skillId}</span>
+            <HealthMark name={skillId} findings={findingsForSkill(health ? [health] : [], skillId)} />
             {usageCounts[skillId] !== undefined && (
               <span className="muted-copy">{usageCounts[skillId]} reads</span>
             )}
             <div className="skill-actions">
               <button
                 type="button"
-                onClick={() => handleRemoveSkill(skillId)}
+                onClick={(event: MouseEvent<HTMLButtonElement>) => {
+                  event.stopPropagation();
+                  void handleRemoveSkill(skillId);
+                }}
                 aria-label={`Remove ${skillId}`}
                 className={FOCUS_RING}
               >
@@ -323,8 +261,6 @@ function CollectionDetail({
           </div>
         ))}
       </div>
-
-      <HealthFindings commandName={collection.name} findings={health?.findings ?? []} onChange={onChange} />
 
       {inbox.length > 0 && (
         <div className="active-skills inbox-picker">
@@ -359,13 +295,23 @@ function CollectionDetail({
               visibleInbox.map((skillId) => {
                 const added = collection.skills.includes(skillId);
                 return (
-                  <div className="library-skill" key={skillId}>
+                  <div className="library-skill library-skill-interactive" key={skillId}>
+                    <button
+                      type="button"
+                      className={`library-skill-hit ${FOCUS_RING}`}
+                      onClick={() => setPreviewSkillId(skillId)}
+                      aria-haspopup="dialog"
+                      aria-label={`Details for ${skillId}`}
+                    />
                     <div className="skill-info">
                       <div className="skill-name">{skillId}</div>
                     </div>
                     <button
                       type="button"
-                      onClick={() => void handleAddFromInbox(skillId)}
+                      onClick={(event: MouseEvent<HTMLButtonElement>) => {
+                        event.stopPropagation();
+                        void handleAddFromInbox(skillId);
+                      }}
                       aria-label={added ? `Added ${skillId}` : `Add ${skillId} to ${collection.name}`}
                       aria-pressed={added}
                       className={`add-icon-button ${FOCUS_RING}`}
@@ -407,6 +353,25 @@ function CollectionDetail({
             )}
           </div>
         </div>
+      )}
+
+      {previewSkillId && (
+        <SkillPreviewDialog
+          id={previewSkillId}
+          source={previewSource}
+          paths={previewRecord?.paths}
+          findings={rowsForSkill(previewSkillId, findingsForSkill(health ? [health] : [], previewSkillId))}
+          toggle={
+            <SkillToggle
+              record={previewRecord}
+              busy={togglingSkill === previewSkillId}
+              onToggle={() =>
+                void handleSkillToggle(previewSkillId, skillPathState(previewRecord?.paths ?? []) !== 'on')
+              }
+            />
+          }
+          onClose={() => setPreviewSkillId(null)}
+        />
       )}
 
       {confirmDelete && (
@@ -470,7 +435,8 @@ export default function CollectionList({
 }) {
   const bridge = useBridge();
   const [collections, setCollections] = useState<Collection[] | null>(null);
-  const [inbox, setInbox] = useState<string[]>([]);
+  const [skillCatalog, setSkillCatalog] = useState<SkillRecord[]>([]);
+  const inbox = useMemo(() => skillCatalog.map((skill) => skill.id), [skillCatalog]);
   const [health, setHealth] = useState<Record<string, CommandHealth>>({});
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [togglingName, setTogglingName] = useState<string | null>(null);
@@ -484,7 +450,7 @@ export default function CollectionList({
       bridge.health(),
     ]);
     if (id !== refreshId.current) return;
-    setInbox(nextSkills.map((skill) => skill.id));
+    setSkillCatalog(nextSkills);
     setCollections(next);
     setHealth(nextHealth.ok ? Object.fromEntries(nextHealth.value.map((row) => [row.name, row])) : {});
     setSelectedName((current) => {
@@ -505,9 +471,12 @@ export default function CollectionList({
 
   async function handleListToggle(collection: Collection) {
     setTogglingName(collection.name);
-    await bridge.setCommandEnabled(collection.name, !collection.enabled);
-    setTogglingName(null);
-    await refresh();
+    try {
+      await bridge.setCommandEnabled(collection.name, !collection.enabled);
+      await refresh();
+    } finally {
+      setTogglingName(null);
+    }
   }
 
   const createSlot = isValidElement(children)
@@ -541,14 +510,16 @@ export default function CollectionList({
                       onClick={() => setSelectedName(collection.name)}
                       onKeyDown={(event) => selectCollection(event, collection.name, setSelectedName)}
                     >
-                      <div className="card-title">
-                        <span>/{collection.name}</span>
-                      </div>
-                      <div className="skill-count">
-                        <span>
-                          {collection.skills.length} {collection.skills.length === 1 ? 'skill' : 'skills'}
-                        </span>
-                        <HealthStrip health={health[collection.name]} />
+                      <HealthMark name={collection.name} findings={health[collection.name]?.findings ?? []} />
+                      <div className="collection-card-body">
+                        <div className="card-title">
+                          <span>/{collection.name}</span>
+                        </div>
+                        <div className="skill-count">
+                          <span>
+                            {collection.skills.length} {collection.skills.length === 1 ? 'skill' : 'skills'}
+                          </span>
+                        </div>
                       </div>
                       <CommandToggle
                         collection={collection}
@@ -569,6 +540,7 @@ export default function CollectionList({
           key={selected.name}
           collection={selected}
           inbox={inbox}
+          skillCatalog={skillCatalog}
           health={health[selected.name]}
           onChange={refresh}
           onDeleted={refresh}

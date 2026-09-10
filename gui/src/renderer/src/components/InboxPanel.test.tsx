@@ -79,7 +79,7 @@ describe('InboxPanel', () => {
     expect(await screen.findByText('tdd')).toBeInTheDocument();
   });
 
-  it('shows a Finding badge on a skill row when a doctor finding names it', async () => {
+  it('shows a health warning on a skill row when a doctor finding names it', async () => {
     const { engine, fs } = createInMemoryWorkspace();
     fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\nkey: sk-abcdefghijklmnopqrstuvwx\n');
     engine.scan();
@@ -88,7 +88,34 @@ describe('InboxPanel', () => {
 
     renderWithProviders(<InboxPanel />, { bridge });
 
-    expect(await screen.findByLabelText('tdd has a doctor finding')).toBeInTheDocument();
+    expect(await screen.findByLabelText('tdd has a health warning')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'tdd has a health warning' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Health' })).not.toBeInTheDocument();
+  });
+
+  it('opens doctor from the preview warning banner, next to the token count', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile(
+      '.cursor/skills/tdd/SKILL.md',
+      '---\ndescription: tdd\n---\n# tdd\n\nsk-abcdefghijklmnopqrstuvwx\n'
+    );
+    engine.scan();
+    engine.create('build', ['tdd']);
+    const bridge = createTestBridge(engine, { projectRoot: DEFAULT_TEST_PROJECT_ROOT });
+
+    renderWithProviders(<InboxPanel />, { bridge });
+    await userEvent.click(await screen.findByRole('button', { name: 'Details for tdd' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'tdd' });
+    expect(await within(dialog).findByText('1 token')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Unused')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Secret leak')).not.toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: '1 warning' }));
+    const health = await screen.findByRole('dialog', { name: 'Health' });
+    expect(within(health).queryByText('Unused')).not.toBeInTheDocument();
+    expect(within(health).getByText('Secret leak')).toBeInTheDocument();
+    expect(within(health).getByText(/on \/build/)).toBeInTheDocument();
   });
 
   it('groups Discover pulls under Market and scanned skills under Project', async () => {
@@ -135,6 +162,7 @@ describe('InboxPanel', () => {
     renderWithProviders(<InboxPanel />, { bridge });
 
     expect(await screen.findByRole('button', { name: 'Update obra/react-patterns' })).toBeInTheDocument();
+    expect(screen.getByText('Update', { selector: '.origin-badge' })).toHaveClass('text-amber-500');
     await userEvent.click(screen.getByRole('button', { name: 'Update obra/react-patterns' }));
     expect(await screen.findByRole('dialog', { name: 'Update obra/react-patterns?' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Update skill' })).toBeInTheDocument();
@@ -272,6 +300,8 @@ describe('InboxPanel', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'tdd' });
     expect(within(dialog).getByText(/Write tests first/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /Turn (on|off) tdd/ })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Delete tdd' })).toBeInTheDocument();
     expect(within(dialog).getByText('.cursor/skills/tdd')).toBeInTheDocument();
     expect(within(dialog).getByText('.claude/skills/tdd')).toBeInTheDocument();
     expect(within(dialog).queryByText(/npx skills add/)).not.toBeInTheDocument();
@@ -289,7 +319,7 @@ describe('InboxPanel', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Details for obra/react-patterns' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'obra/react-patterns' });
-    expect(within(dialog).getByText(/no longer matches the market copy/)).toHaveClass('origin-warning');
+    expect(within(dialog).getByText(/no longer matches the market copy/)).toHaveClass('origin-warning', 'text-destructive');
     expect(within(dialog).getByRole('button', { name: 'Reset to market' })).toHaveClass('primary-button');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Reset to market' }));
     expect(await screen.findByRole('dialog', { name: 'Reset obra/react-patterns?' })).toBeInTheDocument();
@@ -394,7 +424,7 @@ describe('InboxPanel', () => {
     renderWithProviders(<InboxPanel />, { bridge });
 
     expect(await screen.findByText('Synced')).toBeInTheDocument();
-    expect(screen.getByText('Edited')).toBeInTheDocument();
+    expect(screen.getByText('Edited')).toHaveClass('text-destructive');
   });
 
   it('keeps the preview open behind the delete confirm', async () => {
@@ -410,6 +440,41 @@ describe('InboxPanel', () => {
 
     expect(await screen.findByRole('dialog', { name: 'Delete tdd?' })).toBeInTheDocument();
     expect(preview).toBeInTheDocument();
+  });
+
+  it('keeps the toggle busy with a spinner until refresh completes', async () => {
+    const { engine, fs } = createInMemoryWorkspace();
+    fs.writeFile('.agents/skills/tdd/SKILL.md', '# tdd\n');
+    fs.writeFile('.claude/skills/tdd/SKILL.md', '# tdd\n');
+    engine.scan();
+
+    let listSkillsCalls = 0;
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+
+    const real = createTestBridge(engine, { projectRoot: DEFAULT_TEST_PROJECT_ROOT });
+    const bridge = {
+      ...real,
+      listSkills: async () => {
+        listSkillsCalls += 1;
+        if (listSkillsCalls > 1) {
+          await refreshGate;
+        }
+        return real.listSkills();
+      },
+    };
+
+    renderWithProviders(<InboxPanel />, { bridge });
+    await userEvent.click(await screen.findByRole('button', { name: 'Turn off tdd' }));
+
+    const busyToggle = screen.getByRole('button', { name: 'Turn off tdd' });
+    expect(busyToggle).toHaveAttribute('aria-busy', 'true');
+    expect(busyToggle.textContent).not.toMatch(/Off/);
+
+    releaseRefresh();
+    expect(await screen.findByRole('button', { name: 'Turn on tdd' })).toBeInTheDocument();
   });
 
   it('toggles a project skill off, parking it, and back on', async () => {

@@ -6,6 +6,7 @@ import { formatInstalls } from '../lib/format-installs';
 import type { BrowseView, MarketSearchRow, ShelfRole } from '../../../shared/ipc';
 import { StatusNotice, StatusSkeleton, type StatusKind } from '../../../../../shared/status';
 import SkillPreviewDialog from './SkillPreviewDialog';
+import WorkspaceWarning from './WorkspaceWarning';
 
 type AddState = { status: 'success' } | { status: 'error' };
 type Row = { id: string; name: string; installs: number; rank?: number };
@@ -16,14 +17,21 @@ const BROWSE_TABS: Array<{ view: BrowseView; label: string }> = [
   { view: 'trending', label: 'Trending' },
 ];
 
-/** Suggestion tab's own three-state gate (per `docs/plans/last_phase_architecture.md`). Checked fresh each time the tab is selected. */
+/** Editorial role chips on the Suggested tab — mirrors `SEED_ROLES` in `market-seed.ts`. */
+const SUGGEST_ROLE_TABS = [
+  { slug: 'swe', label: 'SWE' },
+  { slug: 'ui-ux', label: 'UI/UX' },
+  { slug: 'pm', label: 'PM' },
+  { slug: 'data', label: 'Data' },
+  { slug: 'agent', label: 'Agent' },
+  { slug: 'other', label: 'Other' },
+] as const;
+
 type SuggestGate =
   | { status: 'idle' }
-  | { status: 'no-folder' }
-  | { status: 'no-key' }
   | { status: 'loading' }
   | { status: 'error' }
-  | { status: 'ready'; rows: Row[] };
+  | { status: 'ready'; rows: Row[]; usedLlm: boolean };
 
 /** Flattens shelves into an id -> row lookup so suggested ids (engine returns ids only) get a name/installs to display. */
 function shelfRowsById(shelves: ShelfRole[]): Map<string, Row> {
@@ -63,7 +71,9 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
   const [addStates, setAddStates] = useState<Record<string, AddState>>({});
   const browseCache = useRef<Partial<Record<BrowseView, Row[]>>>({});
   const [suggestedActive, setSuggestedActive] = useState(false);
+  const [suggestRole, setSuggestRole] = useState<string>(SUGGEST_ROLE_TABS[0].slug);
   const [suggestGate, setSuggestGate] = useState<SuggestGate>({ status: 'idle' });
+  const [hasLlmKey, setHasLlmKey] = useState(true);
   const suggestCheckedFor = useRef<string | null>(null);
 
   useEffect(() => {
@@ -83,6 +93,10 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
     };
     // loadBrowse reads cache + bridge; fetch once per bridge identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bridge]);
+
+  useEffect(() => {
+    void bridge.hasLlmKey().then(setHasLlmKey);
   }, [bridge]);
 
   useEffect(() => {
@@ -143,55 +157,54 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
   }
 
   /**
-   * Suggestion tab's own fetch: `getProjectRoot` -> `hasLlmKey` -> (only
-   * then) `marketShelves` + `suggest`, so no folder or no key never
-   * triggers a market/LLM call. Caches by root+key so switching tabs and
-   * back does not refetch unless one of those actually changed.
+   * Editorial picks by default; LLM rerank when a key is saved. Caches by
+   * role + key so tab switches do not refetch until one of those changes.
    */
-  const runSuggestCheck = useCallback(async () => {
-    const root = await bridge.getProjectRoot();
-    if (!root) {
-      suggestCheckedFor.current = null;
-      setSuggestGate({ status: 'no-folder' });
-      return;
-    }
-    const key = await bridge.hasLlmKey();
-    if (!key) {
-      suggestCheckedFor.current = null;
-      setSuggestGate({ status: 'no-key' });
-      return;
-    }
-    const cacheKey = `${root}::${key}`;
-    if (suggestCheckedFor.current === cacheKey) {
-      return;
-    }
-    setSuggestGate({ status: 'loading' });
-    const shelvesResult = await bridge.marketShelves();
-    if (!shelvesResult.ok) {
-      setSuggestGate({ status: 'error' });
-      return;
-    }
-    const result = await bridge.suggest(shelvesResult.value);
-    if (!result.ok) {
-      setSuggestGate({ status: 'error' });
-      return;
-    }
-    const byId = shelfRowsById(shelvesResult.value);
-    const rows = result.value.ids.map((id) => byId.get(id) ?? { id, name: id, installs: 0 });
-    suggestCheckedFor.current = cacheKey;
-    setSuggestGate({ status: 'ready', rows });
-  }, [bridge]);
+  const runSuggestCheck = useCallback(
+    async (role: string) => {
+      const key = await bridge.hasLlmKey();
+      setHasLlmKey(key);
+      const cacheKey = `${role}::${key}`;
+      if (suggestCheckedFor.current === cacheKey) {
+        return;
+      }
+      setSuggestGate({ status: 'loading' });
+      const shelvesResult = await bridge.marketShelves();
+      const shelves = shelvesResult.ok ? shelvesResult.value : [];
+      let result;
+      try {
+        result = await bridge.suggest(shelves, role);
+      } catch {
+        setSuggestGate({ status: 'error' });
+        return;
+      }
+      if (!result.ok) {
+        setSuggestGate({ status: 'error' });
+        return;
+      }
+      const byId = shelfRowsById(shelves);
+      const rows = result.value.ids.map((id, index) => {
+        const known = byId.get(id);
+        const slug = id.split('/').pop() ?? id;
+        return known ?? { id, name: slug, installs: 0, rank: index + 1 };
+      });
+      suggestCheckedFor.current = cacheKey;
+      setSuggestGate({ status: 'ready', rows, usedLlm: result.value.usedLlm });
+    },
+    [bridge]
+  );
 
   function handleSelectSuggested() {
     setBrowseView(null);
     setBrowseError(null);
     setSuggestedActive(true);
-    void runSuggestCheck();
+    void runSuggestCheck(suggestRole);
   }
 
-  async function handlePickForSuggest() {
-    const picked = await bridge.pickProjectFolder();
-    if (picked) void runSuggestCheck();
+  function handleSuggestRoleSelect(slug: string) {
+    setSuggestRole(slug);
+    suggestCheckedFor.current = null;
+    void runSuggestCheck(slug);
   }
 
   async function runMarketSearch(trimmed: string) {
@@ -298,6 +311,14 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
             it shows up under Skills as Market.
           </p>
         </div>
+        {suggestedActive && !hasLlmKey && (
+          <WorkspaceWarning
+            text="Editorial picks only — no LLM key"
+            actionLabel="Settings"
+            actionAriaLabel="Open LLM settings"
+            onAction={() => onOpenSettings?.()}
+          />
+        )}
       </div>
 
       <form onSubmit={(event) => void handleSearch(event)}>
@@ -319,6 +340,15 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
       {shelves && searchResults === null && (
         <>
           <div role="tablist" aria-label="Role" className="filter-row role-tabs">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={suggestedActive}
+              onClick={handleSelectSuggested}
+              className={`filter ${suggestedActive ? 'active-filter' : ''} ${FOCUS_RING}`}
+            >
+              Suggested
+            </button>
             {BROWSE_TABS.map((tab) => (
               <button
                 key={tab.view}
@@ -334,15 +364,6 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
                 {tab.label}
               </button>
             ))}
-            <button
-              type="button"
-              role="tab"
-              aria-selected={suggestedActive}
-              onClick={handleSelectSuggested}
-              className={`filter ${suggestedActive ? 'active-filter' : ''} ${FOCUS_RING}`}
-            >
-              Suggested
-            </button>
             {shelves.map((r) => (
               <button
                 key={r.slug}
@@ -378,34 +399,30 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
 
       {suggestedActive ? (
         <>
-          {suggestGate.status === 'no-folder' && (
-            <div className="glass-panel status-notice" role="status">
-              <p className="eyebrow">Suggested</p>
-              <h2>Connect a project folder</h2>
-              <p className="muted-copy">
-                Suggestions are ranked against this project&apos;s package.json — connect a folder on Sync first.
-              </p>
-              <button type="button" className={`primary-button ${FOCUS_RING}`} onClick={() => void handlePickForSuggest()}>
-                Pick a folder
-              </button>
-            </div>
-          )}
-          {suggestGate.status === 'no-key' && (
-            <div className="glass-panel status-notice" role="status">
-              <p className="eyebrow">Suggested</p>
-              <h2>No LLM key saved</h2>
-              <p className="muted-copy">
-                Suggestions need your own LLM key to rank market skills against this project&apos;s stack.
-              </p>
-              <button type="button" className={`primary-button ${FOCUS_RING}`} onClick={() => onOpenSettings?.()}>
-                Open Settings
-              </button>
-            </div>
-          )}
+          <div className="suggest-role-picker">
+            <label className="suggest-role-label" htmlFor="suggest-role">
+              Role
+            </label>
+            <select
+              id="suggest-role"
+              value={suggestRole}
+              onChange={(event) => handleSuggestRoleSelect(event.target.value)}
+              className={`suggest-role-select ${FOCUS_RING}`}
+              aria-label="Suggested role"
+            >
+              {SUGGEST_ROLE_TABS.map((tab) => (
+                <option key={tab.slug} value={tab.slug}>
+                  {tab.label}
+                </option>
+              ))}
+            </select>
+          </div>
           {suggestGate.status === 'loading' && <StatusSkeleton />}
-          {suggestGate.status === 'error' && <StatusNotice kind="load" onRetry={() => void runSuggestCheck()} />}
+          {suggestGate.status === 'error' && (
+            <StatusNotice kind="load" onRetry={() => void runSuggestCheck(suggestRole)} />
+          )}
           {suggestGate.status === 'ready' && suggestGate.rows.length === 0 && (
-            <p className="muted-copy">No suggestions right now — nothing on the market index matched this project.</p>
+            <p className="muted-copy">No suggestions right now — every pick for this role is already in your catalog.</p>
           )}
           {suggestGate.status === 'ready' && suggestGate.rows.length > 0 && (
             <ul className="skill-list">{suggestGate.rows.map(renderSkillRow)}</ul>

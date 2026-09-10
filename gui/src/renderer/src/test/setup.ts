@@ -6,7 +6,10 @@ import '@testing-library/jest-dom/vitest';
 // automatic afterEach cleanup (which detects a global `afterEach`) never
 // registers. Without this, rendered DOM from one `it` leaks into the next
 // within the same test file.
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.localStorage?.clear();
+});
 
 // Newer Node versions ship an experimental built-in `localStorage` that
 // leaks onto jsdom's `window` without a backing file, shadowing jsdom's real

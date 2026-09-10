@@ -1,8 +1,9 @@
 import type { ShelfRole, ShelfSkill } from '../backend/market-types.js';
+import { editorialPickIds, loadMarketPicks, type MarketPicksFile } from '../backend/market-picks.js';
 import type { LlmChat } from '../llm/llm-chat.js';
 import { isOk, ok, type Result } from './result.js';
 
-/** Target shortlist size — the LLM is asked for this range; the fingerprint-only fallback is capped to the max. */
+/** Target shortlist size — the LLM is asked for this range; editorial fallback uses the same cap. */
 export const SUGGEST_MIN = 15;
 export const SUGGEST_MAX = 20;
 
@@ -46,6 +47,14 @@ export function flattenShelfSkills(shelves: ShelfRole[]): ShelfSkill[] {
   return [...seen.values()];
 }
 
+/** Keeps shelves for one editorial role, or all shelves when `role` is omitted. */
+export function filterShelvesByRole(shelves: ShelfRole[], role?: string): ShelfRole[] {
+  if (!role) {
+    return shelves;
+  }
+  return shelves.filter((row) => row.slug === role);
+}
+
 /** How many dependency name fragments show up in a shelf skill's id/name — a rough stack-match signal, not semantic ranking. */
 function stackScore(skill: ShelfSkill, deps: string[]): number {
   const haystack = `${skill.id} ${skill.name}`.toLowerCase();
@@ -60,8 +69,8 @@ function stackScore(skill: ShelfSkill, deps: string[]): number {
 }
 
 /**
- * Fingerprint v1: shelf skills not already on the catalog, ranked by
- * stack match then installs. Pure — no network, no LLM.
+ * Fingerprint: shelf skills not already on the catalog, ranked by stack
+ * match then installs. Used only on the LLM path to build a candidate pool.
  */
 export function rankByFingerprint(shelves: ShelfRole[], deps: string[], excludeIds: ReadonlySet<string>): ShelfSkill[] {
   return flattenShelfSkills(shelves)
@@ -71,11 +80,22 @@ export function rankByFingerprint(shelves: ShelfRole[], deps: string[], excludeI
     .map((row) => row.skill);
 }
 
-function suggestSystemPrompt(): string {
+/** Editorial shortlist for a role, minus ids already in the catalog. */
+export function editorialShortlist(
+  picks: MarketPicksFile,
+  role: string,
+  excludeIds: ReadonlySet<string>,
+): string[] {
+  return editorialPickIds(picks, role).filter((id) => !excludeIds.has(id)).slice(0, SUGGEST_MAX);
+}
+
+function suggestSystemPrompt(role?: string): string {
+  const roleHint = role ? ` Focus on skills useful for a ${role} role.` : '';
   return [
     "You pick which candidate skills best match a project's dependency stack.",
     `Reply with strict JSON and nothing else: {"ids":["<id>", ...]}, ${SUGGEST_MIN}-${SUGGEST_MAX} ids, most relevant first.`,
     'Only use ids from the candidate list. Favor skills whose name plainly matches a listed dependency, framework, or language.',
+    roleHint,
   ].join(' ');
 }
 
@@ -104,19 +124,29 @@ function parseSuggestIds(content: string, knownIds: ReadonlySet<string>): string
  * an `LlmChat` is present. A parse/network failure returns an `Err` so
  * the caller can fall back to the fingerprint-only order.
  */
-export async function rerankWithLlm(candidates: ShelfSkill[], deps: string[], llmChat: LlmChat): Promise<Result<string[]>> {
+export async function rerankWithLlm(
+  candidates: ShelfSkill[],
+  deps: string[],
+  llmChat: LlmChat,
+  role?: string,
+): Promise<Result<string[]>> {
   const pool = candidates.slice(0, LLM_CANDIDATE_CAP);
   if (pool.length === 0) {
     return ok([]);
   }
   const knownIds = new Set(pool.map((skill) => skill.id));
   const result = await llmChat.complete({
-    system: suggestSystemPrompt(),
-    user: JSON.stringify({ deps, candidates: pool.map((skill) => ({ id: skill.id, name: skill.name })) }),
+    system: suggestSystemPrompt(role),
+    user: JSON.stringify({ role, deps, candidates: pool.map((skill) => ({ id: skill.id, name: skill.name })) }),
     maxTokens: SUGGEST_LLM_MAX_TOKENS,
   });
   if (!isOk(result)) {
     return result;
   }
   return ok(parseSuggestIds(result.value, knownIds));
+}
+
+/** Loads editorial picks from the repo file. Tests can pass a fixture instead. */
+export function loadEditorialPicks(): MarketPicksFile {
+  return loadMarketPicks();
 }

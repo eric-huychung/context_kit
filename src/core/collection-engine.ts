@@ -7,6 +7,7 @@ import type {
   Collection,
   CommandHealth,
   CommandRecord,
+  DriftAction,
   HealthReport,
   LeftoverRecord,
   OriginCheck,
@@ -16,6 +17,8 @@ import type {
   SkillRecord,
   State,
   SuggestResult,
+  SyncAudit,
+  SyncPreview,
   UsageRow,
 } from '../types/index.js';
 import type { ShelfRole } from '../backend/market-types.js';
@@ -23,15 +26,26 @@ import { err, isOk, ok, type Result } from './result.js';
 import { isCommandSkillStamp, isSkilStamped, parseStampedSkills, writeCommandFile, writeOpenAiYaml } from './command-file.js';
 import {
   AGENTS_MD,
+  collectGlobRules,
   collectRules,
   leftoverAlwaysOnWarnings,
+  leftoverRuleId,
   readRuleSection,
   removeRuleSection,
   upsertRuleSection,
 } from './project-rules.js';
 import { computeLlmFindings, computeSkillFindings, estimateTokens, parseDescription } from './health-checks.js';
 import type { LlmFindingsSkillInput } from './health-checks.js';
-import { parsePackageDeps, rankByFingerprint, rerankWithLlm, SUGGEST_MAX } from './suggest.js';
+import { buildSyncAudit, readSyncBodies } from './workspace-sync.js';
+import {
+  editorialShortlist,
+  filterShelvesByRole,
+  loadEditorialPicks,
+  parsePackageDeps,
+  rankByFingerprint,
+  rerankWithLlm,
+  SUGGEST_MAX,
+} from './suggest.js';
 import type { LlmChat } from '../llm/llm-chat.js';
 import {
   COMMAND_DIR_BY_IDE,
@@ -293,22 +307,36 @@ export class CollectionEngine implements ICollectionEngine {
     return ok(report);
   }
 
-  async suggest(shelves: ShelfRole[]): Promise<Result<SuggestResult>> {
+  async suggest(shelves: ShelfRole[], options?: { role?: string }): Promise<Result<SuggestResult>> {
+    const role = options?.role ?? 'swe';
+    const excludeIds = new Set(this.state.skills.map((skill) => skill.id));
+    let picks;
+    try {
+      picks = loadEditorialPicks();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not load editorial picks.';
+      return err(new Error(message));
+    }
+    const editorial = editorialShortlist(picks, role, excludeIds);
+
     if (!this.llmChat) {
-      return err(new Error('NEED_KEY'));
+      return ok({ ids: editorial, usedLlm: false });
     }
 
-    const excludeIds = new Set(this.state.skills.map((skill) => skill.id));
     const pkgJson = this.fs.readFile('package.json');
     const deps = isOk(pkgJson) ? parsePackageDeps(pkgJson.value) : [];
-    const ranked = rankByFingerprint(shelves, deps, excludeIds);
+    const roleShelves = filterShelvesByRole(shelves, role);
+    const ranked = rankByFingerprint(roleShelves, deps, excludeIds);
     if (ranked.length === 0) {
-      return ok({ ids: [] });
+      return ok({ ids: editorial, usedLlm: true });
     }
 
-    const reranked = await rerankWithLlm(ranked, deps, this.llmChat);
-    const ids = isOk(reranked) && reranked.value.length > 0 ? reranked.value : ranked.slice(0, SUGGEST_MAX).map((skill) => skill.id);
-    return ok({ ids });
+    const reranked = await rerankWithLlm(ranked, deps, this.llmChat, role);
+    const ids =
+      isOk(reranked) && reranked.value.length > 0
+        ? reranked.value
+        : ranked.slice(0, SUGGEST_MAX).map((skill) => skill.id);
+    return ok({ ids, usedLlm: true });
   }
 
   create(name: string, skillIds: string[]): Result<Collection> {
@@ -784,14 +812,211 @@ export class CollectionEngine implements ICollectionEngine {
       }
     }
 
-    const codexRules = this.fs.listAllFiles('.codex/rules');
-    if (isOk(codexRules)) {
-      for (const path of codexRules.value) {
-        rows.push({ kind: 'rule', id: path, path });
+    const globRules = collectGlobRules(this.fs);
+    if (isOk(globRules)) {
+      for (const rule of globRules.value) {
+        rows.push({ kind: 'rule', id: leftoverRuleId(rule.path), path: rule.path });
+      }
+    }
+
+    for (const dir of ['.codex/rules', '.agents/rules']) {
+      const listed = this.fs.listAllFiles(dir);
+      if (!isOk(listed)) {
+        continue;
+      }
+      for (const path of listed.value) {
+        rows.push({ kind: 'rule', id: leftoverRuleId(path), path });
       }
     }
 
     return ok(rows);
+  }
+
+  auditSync(): Result<SyncAudit> {
+    const listed = this.leftovers();
+    if (!isOk(listed)) {
+      return listed;
+    }
+    return ok(buildSyncAudit(this.fs, listed.value));
+  }
+
+  previewSync(path: string): Result<SyncPreview> {
+    const listed = this.leftovers();
+    if (!isOk(listed)) {
+      return listed;
+    }
+    const row = buildSyncAudit(this.fs, listed.value).rows.find((item) => item.path === path);
+    if (!row) {
+      return err(new Error(`No leftover at '${path}'.`));
+    }
+    const bodies = readSyncBodies(this.fs, row);
+    if (!isOk(bodies)) {
+      return bodies;
+    }
+    return ok({
+      id: row.id,
+      kind: row.kind,
+      leftoverPath: row.path,
+      leftoverBody: bodies.value.leftoverBody,
+      canonicalPath: row.canonicalPath ?? '',
+      canonicalBody: bodies.value.canonicalBody,
+    });
+  }
+
+  async importToCanonical(ids: string[]): Promise<Result<AdoptResult>> {
+    const listed = this.leftovers();
+    if (!isOk(listed)) {
+      return listed;
+    }
+    const audit = buildSyncAudit(this.fs, listed.value);
+    const needsImport = new Set(
+      audit.rows.filter((row) => row.status === 'needs-import').map((row) => row.id)
+    );
+    const idSet = new Set(ids);
+    const targets = listed.value.filter((row) => idSet.has(row.id) && needsImport.has(row.id));
+    const importedIds = new Set<string>();
+
+    for (const row of targets) {
+      if (importedIds.has(row.id)) {
+        continue;
+      }
+      const adoptResult = this.adoptOne(row);
+      if (!isOk(adoptResult)) {
+        return err(adoptResult.error);
+      }
+      if (adoptResult.value) {
+        importedIds.add(row.id);
+      }
+    }
+
+    const persistResult = this.persist();
+    if (!isOk(persistResult)) {
+      return err(new Error(`Failed to save after import: ${persistResult.error.message}`));
+    }
+
+    return ok({ adopted: [...importedIds], deprecated: [] });
+  }
+
+  async removeLeftovers(paths: string[]): Promise<Result<AdoptResult>> {
+    const listed = this.leftovers();
+    if (!isOk(listed)) {
+      return listed;
+    }
+    const audit = buildSyncAudit(this.fs, listed.value);
+    const ready = new Set(
+      audit.rows.filter((row) => row.status === 'ready-to-remove').map((row) => row.path)
+    );
+    const leftoverByPath = new Map(listed.value.map((row) => [row.path, row]));
+
+    for (const path of paths) {
+      if (!ready.has(path)) {
+        return err(
+          new Error(`Cannot remove '${path}': not a matching leftover. Import first, or resolve drift.`)
+        );
+      }
+    }
+
+    const deprecated: string[] = [];
+    for (const path of paths) {
+      const row = leftoverByPath.get(path);
+      if (!row) {
+        continue;
+      }
+      const moved = this.moveToDeprecated(row);
+      if (!isOk(moved)) {
+        return err(moved.error);
+      }
+      deprecated.push(moved.value);
+      if (row.kind === 'skill') {
+        const record = this.state.skills.find((skill) => skill.id === row.id);
+        if (record) {
+          record.paths = record.paths.filter((skillPath) => skillPath !== row.path);
+        }
+      }
+    }
+
+    const persistResult = this.persist();
+    if (!isOk(persistResult)) {
+      return err(new Error(`Failed to save after removing leftovers: ${persistResult.error.message}`));
+    }
+
+    this.writtenPaths = deprecated;
+    return ok({ adopted: [], deprecated });
+  }
+
+  async resolveDrift(id: string, action: DriftAction, path?: string): Promise<Result<AdoptResult>> {
+    const listed = this.leftovers();
+    if (!isOk(listed)) {
+      return listed;
+    }
+    const audit = buildSyncAudit(this.fs, listed.value);
+    const targets = audit.rows.filter(
+      (row) => row.status === 'drift' && row.id === id && (path === undefined || row.path === path)
+    );
+    if (targets.length === 0) {
+      return err(new Error(`No drift to resolve for '${id}'.`));
+    }
+    if (action === 'import' && path === undefined && targets.length > 1) {
+      return err(new Error(`Cannot import '${id}': pick one leftover path.`));
+    }
+
+    const leftoverByPath = new Map(listed.value.map((row) => [row.path, row]));
+    const written: string[] = [];
+    const deprecated: string[] = [];
+    const adopted: string[] = [];
+
+    if (action === 'keep-live') {
+      for (const target of targets) {
+        const row = leftoverByPath.get(target.path);
+        if (!row) {
+          continue;
+        }
+        const moved = this.moveToDeprecated(row);
+        if (!isOk(moved)) {
+          return err(moved.error);
+        }
+        deprecated.push(moved.value);
+        written.push(moved.value);
+        if (row.kind === 'skill') {
+          const record = this.state.skills.find((skill) => skill.id === row.id);
+          if (record) {
+            record.paths = record.paths.filter((skillPath) => skillPath !== row.path);
+          }
+        }
+      }
+    } else {
+      const sourceRow = leftoverByPath.get(targets[0]?.path ?? '');
+      if (!sourceRow) {
+        return err(new Error(`No drift to resolve for '${id}'.`));
+      }
+      const overwritten = this.overwriteCanonicalFrom(sourceRow);
+      if (!isOk(overwritten)) {
+        return overwritten;
+      }
+      adopted.push(id);
+      written.push(...overwritten.value);
+
+      const moved = this.moveToDeprecated(sourceRow);
+      if (!isOk(moved)) {
+        return err(moved.error);
+      }
+      deprecated.push(moved.value);
+      written.push(moved.value);
+      if (sourceRow.kind === 'skill') {
+        const record = this.state.skills.find((skill) => skill.id === sourceRow.id);
+        if (record) {
+          record.paths = record.paths.filter((skillPath) => skillPath !== sourceRow.path);
+        }
+      }
+    }
+
+    const persistResult = this.persist();
+    if (!isOk(persistResult)) {
+      return err(new Error(`Failed to save after resolving drift: ${persistResult.error.message}`));
+    }
+
+    this.writtenPaths = written;
+    return ok({ adopted, deprecated });
   }
 
   async adoptLeftovers(ids?: string[]): Promise<Result<AdoptResult>> {
@@ -843,6 +1068,12 @@ export class CollectionEngine implements ICollectionEngine {
       if (!record) {
         return ok(false);
       }
+      if (this.state.commands.some((command) => command.name === row.id) || this.liveIsCommandSkill(row.id)) {
+        return err(
+          new Error(`Cannot import '${row.id}': that name is already a command.`),
+          { code: 'COMMAND_NAME_COLLISION', labels: [row.id] }
+        );
+      }
       const livePaths = liveSkillPaths(row.id);
       const missing = livePaths.filter((path) => !isOk(this.fs.readFile(`${path}/SKILL.md`)));
       if (missing.length === 0) {
@@ -867,7 +1098,7 @@ export class CollectionEngine implements ICollectionEngine {
       return isOk(on) ? ok(true) : err(on.error);
     }
 
-    const name = ruleNameFromLeftoverPath(row.path);
+    const name = leftoverRuleId(row.path);
     const sharedListed = collectRules(this.fs);
     const alreadyShared = isOk(sharedListed) && sharedListed.value.some((rule) => rule.kind === 'shared' && rule.id === name);
     if (alreadyShared) {
@@ -884,6 +1115,55 @@ export class CollectionEngine implements ICollectionEngine {
       return err(new Error(`Failed to adopt '${row.id}': ${written.error.message}`));
     }
     return ok(true);
+  }
+
+  private liveIsCommandSkill(id: string): boolean {
+    return liveSkillPaths(id).some((path) => {
+      const contents = this.fs.readFile(`${path}/SKILL.md`);
+      return isOk(contents) && isCommandSkillStamp(contents.value);
+    });
+  }
+
+  /** Overwrite canonical from a leftover. Caller deprecates the leftover path. */
+  private overwriteCanonicalFrom(row: LeftoverRecord): Result<string[]> {
+    if (row.kind === 'command' || (row.kind === 'skill' && this.liveIsCommandSkill(row.id))) {
+      return err(
+        new Error(`Cannot import '${row.id}': that name is already a skill in the live pair.`),
+        { code: 'COMMAND_NAME_COLLISION', labels: [row.id] }
+      );
+    }
+
+    const written: string[] = [];
+
+    if (row.kind === 'skill') {
+      const livePaths = liveSkillPaths(row.id);
+      for (const path of livePaths) {
+        const copied = this.fs.copyDir(row.path, path);
+        if (!isOk(copied)) {
+          return err(new Error(`Failed to import '${row.id}': ${copied.error.message}`));
+        }
+        written.push(path);
+      }
+      const record = this.state.skills.find((skill) => skill.id === row.id);
+      if (record) {
+        record.paths = [...new Set([...record.paths, ...livePaths])];
+        record.hash = hashSkillAt(this.fs, livePaths[0] ?? row.path) ?? record.hash;
+      }
+      return ok(written);
+    }
+
+    const body = this.fs.readFile(row.path);
+    if (!isOk(body)) {
+      return err(new Error(`Failed to import '${row.id}': ${body.error.message}`));
+    }
+    const name = leftoverRuleId(row.path);
+    const agents = this.fs.readFile(AGENTS_MD);
+    const next = upsertRuleSection(isOk(agents) ? agents.value : '', name, body.value);
+    const saved = this.fs.writeFile(AGENTS_MD, next);
+    if (!isOk(saved)) {
+      return err(new Error(`Failed to import '${row.id}': ${saved.error.message}`));
+    }
+    return ok([AGENTS_MD]);
   }
 
   /** Skill leftovers are folders (copyDir/removeDir); command/rule leftovers are single files. */
@@ -979,11 +1259,13 @@ export class CollectionEngine implements ICollectionEngine {
       return err(new Error(`Failed to park skill '${skillId}': ${parked.error.message}`));
     }
 
+    const muted: string[] = [];
     for (const path of presentLive) {
-      const removed = this.fs.removeDir(path);
+      const removed = this.removeSkillFolder(path);
       if (!isOk(removed)) {
         return err(new Error(`Failed to park skill '${skillId}': ${removed.error.message}`));
       }
+      muted.push(...removed.value);
     }
 
     const remainingPaths = record.paths.filter((path) => !livePaths.includes(path));
@@ -1000,7 +1282,7 @@ export class CollectionEngine implements ICollectionEngine {
       return err(new Error(`Failed to save after parking '${skillId}': ${persistResult.error.message}`));
     }
 
-    this.writtenPaths = [...presentLive, parkedPath];
+    this.writtenPaths = [...muted, parkedPath];
     return ok(nextRecord);
   }
 
@@ -1142,14 +1424,17 @@ export class CollectionEngine implements ICollectionEngine {
       return err(new Error(`Failed to turn off '/${name}': ${parked.error.message}`));
     }
 
+    const muted: string[] = [];
     for (const path of presentLive) {
-      const removed = this.fs.removeDir(path);
+      const removed = this.removeSkillFolder(path);
       if (!isOk(removed)) {
         return err(new Error(`Failed to turn off '/${name}': ${removed.error.message}`));
       }
+      muted.push(...removed.value);
     }
+    muted.push(...this.removeSkilStampedCommandFiles(name));
 
-    this.writtenPaths = [...presentLive, parkedPath];
+    this.writtenPaths = [...muted, parkedPath];
     return ok(this.toView(record));
   }
 
@@ -1206,14 +1491,33 @@ export class CollectionEngine implements ICollectionEngine {
     const removed: string[] = [];
     for (const path of liveSkillPaths(name)) {
       if (isOk(this.fs.readFile(`${path}/SKILL.md`))) {
-        const result = this.fs.removeDir(path);
-        if (isOk(result)) removed.push(path);
+        const result = this.removeSkillFolder(path);
+        if (isOk(result)) removed.push(...result.value);
       }
     }
     const parked = parkedCommandPath(name);
     if (isOk(this.fs.readFile(`${parked}/SKILL.md`))) {
       const result = this.fs.removeDir(parked);
       if (isOk(result)) removed.push(parked);
+    }
+    removed.push(...this.removeSkilStampedCommandFiles(name));
+    return removed;
+  }
+
+  /** Skil-stamped command files in IDE `commands/` dirs are leftovers, not live trees — remove on off/delete. */
+  private removeSkilStampedCommandFiles(name: string): string[] {
+    const removed: string[] = [];
+    for (const [ide, dir] of Object.entries(COMMAND_DIR_BY_IDE) as Array<[IDE, string]>) {
+      const ext = COMMAND_EXTENSION_BY_IDE[ide] ?? '.md';
+      const path = `${dir}/${name}${ext}`;
+      const contents = this.fs.readFile(path);
+      if (!isOk(contents) || !isSkilStamped(contents.value)) {
+        continue;
+      }
+      const result = this.fs.removeFile(path);
+      if (isOk(result)) {
+        removed.push(path);
+      }
     }
     return removed;
   }
@@ -1466,13 +1770,6 @@ function hashSkillAt(fs: IFileSystemAdapter, folder: string): string | undefined
     return undefined;
   }
   return createHash('sha256').update(contents.value, 'utf8').digest('hex');
-}
-
-/** `.codex/rules/pair-programming/behavior.md` → `pair-programming/behavior`. */
-function ruleNameFromLeftoverPath(path: string): string {
-  const prefix = '.codex/rules/';
-  const relative = path.startsWith(prefix) ? path.slice(prefix.length) : path;
-  return relative.replace(/\.md$/i, '');
 }
 
 function upsertDeploy(
