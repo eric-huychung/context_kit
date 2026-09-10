@@ -117,6 +117,12 @@ describe('landing page', () => {
     const vercel = readFileSync(join(root, 'vercel.json'), 'utf-8');
     expect(nextConfig).toMatch(/output:\s*['"]export['"]/);
     expect(vercel).toContain('"outputDirectory": "web/out"');
+    const vercelConfig = JSON.parse(vercel) as {
+      functions?: Record<string, { includeFiles?: unknown }>;
+    };
+    for (const [name, fn] of Object.entries(vercelConfig.functions ?? {})) {
+      expect(typeof fn.includeFiles, `${name} includeFiles must be a glob string`).toBe('string');
+    }
     expect(existsSync(join(publicDir, 'index.html'))).toBe(false);
   });
 
