@@ -43,19 +43,62 @@ describe('computeSkillFindings', () => {
     expect(computeSkillFindings(base)).toEqual([]);
   });
 
-  it('flags idle-cost when the description is long', () => {
+  it('does not flag idle-cost at the 500-char spec-adjacent cap', () => {
     const findings = computeSkillFindings({ ...base, description: 'x'.repeat(500) });
+    expect(findings.some((finding) => finding.type === 'idle-cost')).toBe(false);
+  });
+
+  it('flags idle-cost when the description is over 500 chars', () => {
+    const findings = computeSkillFindings({ ...base, description: 'x'.repeat(501) });
     expect(findings).toContainEqual(expect.objectContaining({ type: 'idle-cost', skillId: 'tdd' }));
   });
 
-  it('flags fat-body when the body exceeds the line cap', () => {
-    const body = `# tdd\n${Array.from({ length: 400 }, () => 'line').join('\n')}`;
+  it('does not flag fat-body at 500 lines', () => {
+    const body = Array.from({ length: 500 }, () => 'line').join('\n');
+    const findings = computeSkillFindings({ ...base, body });
+    expect(findings.some((finding) => finding.type === 'fat-body')).toBe(false);
+  });
+
+  it('flags fat-body when the body exceeds the 500-line cap', () => {
+    const body = Array.from({ length: 501 }, () => 'line').join('\n');
     const findings = computeSkillFindings({ ...base, body });
     expect(findings).toContainEqual(expect.objectContaining({ type: 'fat-body', skillId: 'tdd' }));
   });
 
-  it('flags unused when usage count is 0', () => {
+  it('flags fat-body when the body exceeds 20000 chars even with few lines', () => {
+    const findings = computeSkillFindings({ ...base, body: 'x'.repeat(20_001) });
+    expect(findings).toContainEqual(expect.objectContaining({ type: 'fat-body', skillId: 'tdd' }));
+  });
+
+  it('does not flag unused when usage is 0 but the project has no recorded reads', () => {
     const findings = computeSkillFindings({ ...base, usageCount: 0 });
+    expect(findings.some((finding) => finding.type === 'unused')).toBe(false);
+  });
+
+  it('flags unused when this skill is unread, peers have reads, and grace has passed', () => {
+    const findings = computeSkillFindings({
+      ...base,
+      usageCount: 0,
+      projectHasUsage: true,
+      observedAt: '2020-01-01T00:00:00.000Z',
+      now: '2026-09-10T00:00:00.000Z',
+    });
+    expect(findings).toContainEqual(expect.objectContaining({ type: 'unused', skillId: 'tdd' }));
+  });
+
+  it('does not flag unused during the 14-day grace window', () => {
+    const findings = computeSkillFindings({
+      ...base,
+      usageCount: 0,
+      projectHasUsage: true,
+      observedAt: '2026-09-01T00:00:00.000Z',
+      now: '2026-09-10T00:00:00.000Z',
+    });
+    expect(findings.some((finding) => finding.type === 'unused')).toBe(false);
+  });
+
+  it('treats a missing observedAt as old and flags unused once peers have reads', () => {
+    const findings = computeSkillFindings({ ...base, usageCount: 0, projectHasUsage: true });
     expect(findings).toContainEqual(expect.objectContaining({ type: 'unused', skillId: 'tdd' }));
   });
 

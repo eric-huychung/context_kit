@@ -71,7 +71,7 @@ We wrap skills.sh (via skil's OIDC backend) and `npx skills add`. We do not host
 28. As a developer, I want to toggle a shared rule on/off the same way I toggle a skill, so shared law follows the same mental model as everything else
 29. As a developer, I want to click a rule row and preview its body, so I know what the agent will read
 30. As a developer, I want glob rules (`.cursor/rules/*.mdc`, etc.) left exactly where they are, so path-scoped rules are never flattened into `AGENTS.md` by mistake
-31. As a developer, I want a doctor pass (`skil doctor` / the Commands health strip) that flags idle-cost, fat-body, unused, hash-split, and secret findings with no API key required, so I can see what's expensive or risky before I add a key for anything smarter
+31. As a developer, I want a doctor pass (`skil doctor` / the Commands health strip) that flags idle-cost (description > 500 chars), fat-body (SKILL.md > 500 lines or 20k chars), unused (Claude reads only, after the project has usage and a 14-day grace), hash-split, and secret findings with no API key required, so I can see what's expensive or risky before I add a key for anything smarter
 32. As a developer, I want to add my own LLM key (Anthropic, OpenAI, or OpenRouter) from a header Settings gear, so doctor can also catch skill-description conflicts and vague triggers that math and regex can't see
 33. As a developer, I want Save to immediately test my key with a 1-token call, so a typo or bad key fails clearly right away instead of silently breaking every later doctor run
 34. As a scripting user, I want the CLI to read `SKIL_LLM_PROVIDER` / `SKIL_LLM_API_KEY` from the environment, so `skil doctor` gets the LLM slice too without a config file
@@ -89,14 +89,14 @@ We wrap skills.sh (via skil's OIDC backend) and `npx skills add`. We do not host
 - **Map, not trees:** Commands are one id list in our state. Disk folders do not move when you file. The live pair is the only write target — no picker.
 - **Scan is pull; toggle is push.** `scan()` only unions live + leftover + parked into the catalog — it never writes anything. `setSkillEnabled` / `setCommandEnabled` / `setSharedRuleEnabled` are the only writes, and each one happens the instant the user acts, not on a later push step.
 - **On/off is a path, not a flag.** There is no `enabled: true` sitting in `state.json` that can drift from disk — the live pair present is on, `.skil/parked/…` is off, a leftover root is neither.
-- **Usage:** `UsageCollector` + `engine.usage()`. Counts only. Claude first.
+- **Usage:** `UsageCollector` + `engine.usage()`. Counts only. Claude JSONL only — leftover `.cursor` folders are not a usage source. Unused does not warn on first download (needs a project-level read and a 14-day grace).
 
 ### Module Boundaries
 
 1. **Engine** — scan, catalog, one command list, file, `setSkillEnabled` / `setCommandEnabled` / `setSharedRuleEnabled`, `leftovers` / `adoptLeftovers`, usage, rules listing, `health()` (math+regex always, `conflict`/`vague-trigger` with a BYOK key), `suggest(shelves)` (fingerprint + LLM rerank, BYOK key required). One deep module (today `CollectionEngine`).
 2. **FileSystemAdapter** — state JSON plus walk/read/write/copy/remove for `SKILL.md` discovery and live/parked/deprecated moves.
 3. **SkillsAdapter** — search, browse, install (always into `.agents`, no dock argument). Convert/skillsmith is leftover and already gone.
-4. **UsageCollector** — in-memory in tests; Claude logs in prod.
+4. **UsageCollector** — in-memory in tests; Claude logs in prod. No Cursor/Codex/Copilot parsers this phase.
 5. **CLI** — parse and print.
 6. **GUI** — bind to the engine. Header path + Re-scan when connected. Skills / Commands / Rules are each one list with a toggle per row. Discover / folder pick. No dock picker anywhere.
 7. **DiskWatch** — debounce / mute / skip `.git` and `.skil/deprecated`. Calls `scan()` only — there is no write-through step left to run on a watcher tick, since toggling already wrote everything it needed to. Not a second deep module.
@@ -156,7 +156,7 @@ v6 `skills[]` loads as-is; a leftover `inbox` array on disk is ignored, not migr
 - `skil rules` / `rules show <id>` / `rules enable <id>` / `rules disable <id>` — list shared + glob rules, read a body, toggle a shared-law `AGENTS.md` section
 - `skil leftovers` / `skil adopt [ids...]` — list leftover paths, then copy-into-live + move-to-deprecated
 - `skil usage` — print use counts
-- `skil doctor [name]` — findings table (token-ish cost + warn count per command), or one command's findings with a one-line why each; math + regex always, plus `conflict` / `vague-trigger` when a BYOK key is set
+- `skil doctor [name]` — findings table (token-ish cost + warn count per command), or one command's findings with a one-line why each; math + regex always (idle-cost >500 chars, fat-body >500 lines / 20k chars, unused only after Claude usage evidence + 14-day grace), plus `conflict` / `vague-trigger` when a BYOK key is set
 - `skil suggest` — shortlist ~15-20 market ids matching this project's `package.json` stack; needs a BYOK key (clear "no LLM key" message otherwise, no stack trace); never installs
 - `skil search [query] [--trending]`
 - `skil install <skillId>` — market install straight to the live pair; no `--to`
@@ -221,7 +221,8 @@ API origin: `SKIL_API_URL`, then `CONTEXTKIT_API_URL`, then `website.json`.
 - `run` as a product feature
 - SQLite
 - "Used properly" / LLM-judge eval
-- Copilot usage counts (leftover scan yes)
+- Copilot/Codex/Cursor usage counts (leftover scan yes; unused is Claude JSONL only)
+- Unused zombie (90-day silent) — unused is 14-day grace + project evidence only
 - Stamps on ordinary `SKILL.md` (command/rule stamps we generate are unaffected)
 - Per-tree Skills/Commands lists or per-tree `state.json`
 - Modeling runtime overlap (`.cursor` + `.agents` both loaded)

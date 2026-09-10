@@ -3,11 +3,13 @@ import type { Finding } from '../types/index.js';
 import type { LlmChat } from '../llm/llm-chat.js';
 import { isOk, ok, type Result } from './result.js';
 
-/** Description length past this is "always loaded, rarely worth it" (idle-cost). */
-const IDLE_COST_CHAR_THRESHOLD = 400;
-/** SKILL.md body past either cap is "fat" — expensive once actually invoked. */
-const FAT_BODY_LINE_THRESHOLD = 300;
-const FAT_BODY_CHAR_THRESHOLD = 12_000;
+/** Description length past this is "always loaded, rarely worth it" (idle-cost). 500 = Skillsaw error; spec max is 1024. */
+const IDLE_COST_CHAR_THRESHOLD = 500;
+/** SKILL.md body past either cap is "fat" — agentskills.io: keep under 500 lines / 5000 tokens. */
+const FAT_BODY_LINE_THRESHOLD = 500;
+const FAT_BODY_CHAR_THRESHOLD = 20_000;
+/** Unused stays quiet this long after install/file so first-download is not a wall of warnings. */
+const UNUSED_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** Secret-shaped strings. Deliberately narrow (vendor key prefixes, PEM headers) to avoid flagging ordinary prose. */
 const SECRET_PATTERNS: RegExp[] = [
@@ -67,9 +69,20 @@ function fatBodyFinding(skillId: string, body: string): Finding | null {
   };
 }
 
-function unusedFinding(skillId: string, usageCount: number): Finding | null {
-  if (usageCount > 0) {
+function unusedFinding(
+  skillId: string,
+  usageCount: number,
+  opts: { projectHasUsage?: boolean; observedAt?: string; now?: string }
+): Finding | null {
+  if (usageCount > 0 || !opts.projectHasUsage) {
     return null;
+  }
+  if (opts.observedAt) {
+    const observedMs = Date.parse(opts.observedAt);
+    const nowMs = Date.parse(opts.now ?? new Date().toISOString());
+    if (!Number.isNaN(observedMs) && !Number.isNaN(nowMs) && nowMs - observedMs < UNUSED_GRACE_MS) {
+      return null;
+    }
   }
   return { type: 'unused', skillId, message: 'No recorded reads — filed but never used.' };
 }
@@ -104,11 +117,20 @@ export function computeSkillFindings(opts: {
   body: string;
   usageCount: number;
   diskHashes: ReadonlySet<string>;
+  /** True when any skill in this project has at least one recorded read. */
+  projectHasUsage?: boolean;
+  /** Earliest install/file time used for unused grace. Missing = treat as old. */
+  observedAt?: string;
+  now?: string;
 }): Finding[] {
   const findings = [
     idleCostFinding(opts.skillId, opts.description),
     fatBodyFinding(opts.skillId, opts.body),
-    unusedFinding(opts.skillId, opts.usageCount),
+    unusedFinding(opts.skillId, opts.usageCount, {
+      projectHasUsage: opts.projectHasUsage,
+      observedAt: opts.observedAt,
+      now: opts.now,
+    }),
     hashSplitFinding(opts.skillId, opts.diskHashes),
     secretFinding(opts.skillId, opts.body),
   ];

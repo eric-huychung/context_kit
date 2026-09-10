@@ -7,7 +7,7 @@ import { runDoctor } from './doctor.js';
 
 function buildEngine(): CollectionEngine {
   const fs = new InMemoryFileSystemAdapter();
-  fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+  fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\nkey: sk-abcdefghijklmnopqrstuvwx\n');
   const engine = new CollectionEngine(fs, new InMemorySkillsAdapter());
   engine.scan();
   return engine;
@@ -38,8 +38,7 @@ describe('runDoctor', () => {
     const outcome = await runDoctor(engine, 'build');
 
     expect(outcome.isError).toBe(false);
-    // tdd is filed but never read, so 'unused' always fires with no key.
-    expect(outcome.message).toContain('unused');
+    expect(outcome.message).toContain('secret');
     expect(outcome.message).toContain('tdd');
   });
 

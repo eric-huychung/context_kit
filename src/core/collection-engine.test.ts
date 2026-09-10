@@ -10,6 +10,15 @@ import { RealFileSystemAdapter } from '../adapters/real-fs-adapter.js';
 import type { IDE } from '../types/index.js';
 import type { LlmChat } from '../llm/llm-chat.js';
 
+function backdateFirstCommand(disk: InMemoryFileSystemAdapter, createdAt: string): void {
+  const loaded = disk.readJSON<{ commands: Array<{ createdAt: string }> }>(STATE_PATH);
+  if (!isOk(loaded) || !loaded.value.commands[0]) {
+    throw new Error('expected a persisted command to backdate');
+  }
+  loaded.value.commands[0].createdAt = createdAt;
+  disk.writeJSON(STATE_PATH, loaded.value);
+}
+
 /**
  * Mimics `npx skills add --agent universal` (vercel-labs/skills): dumps
  * into `.agents/skills/<short-name>`, where the folder name is the last
@@ -1497,10 +1506,10 @@ describe('CollectionEngine', () => {
       }
     });
 
-    it('never crashes and needs no LLM key: idle-cost, fat-body, unused, hash-split, secret all populate', async () => {
-      const longDescription = 'x'.repeat(500);
+    it('never crashes and needs no LLM key: idle-cost, fat-body, hash-split, secret all populate', async () => {
+      const longDescription = 'x'.repeat(501);
       const body = (marker: string) =>
-        `---\nname: tdd\ndescription: ${longDescription}\n---\n${Array.from({ length: 400 }, () => 'line').join('\n')}\nkey: sk-abcdefghijklmnopqrstuvwx\n${marker}\n`;
+        `---\nname: tdd\ndescription: ${longDescription}\n---\n${Array.from({ length: 501 }, () => 'line').join('\n')}\nkey: sk-abcdefghijklmnopqrstuvwx\n${marker}\n`;
       // Both live copies carry the full fat/secret/idle-cost content (so readSkillMd's
       // "first readable path" pick doesn't matter) but differ by one trailing marker,
       // so they hash differently and hash-split still fires.
@@ -1516,7 +1525,21 @@ describe('CollectionEngine', () => {
         const build = result.value.find((row) => row.name === 'build');
         expect(build?.usedLlm).toBe(false);
         const types = build?.findings.map((f) => f.type).sort();
-        expect(types).toEqual(['fat-body', 'hash-split', 'idle-cost', 'secret', 'unused']);
+        expect(types).toEqual(['fat-body', 'hash-split', 'idle-cost', 'secret']);
+      }
+    });
+
+    it('does not flag unused when the project has no recorded reads', async () => {
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      engine.scan();
+      engine.create('build', ['tdd']);
+
+      const result = await engine.health();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        const build = result.value.find((row) => row.name === 'build');
+        expect(build?.findings.some((f) => f.type === 'unused')).toBe(false);
       }
     });
 
@@ -1527,6 +1550,45 @@ describe('CollectionEngine', () => {
       fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
       engine.scan();
       engine.create('build', ['tdd']);
+
+      const result = await engine.health();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        const build = result.value.find((row) => row.name === 'build');
+        expect(build?.findings.some((f) => f.type === 'unused')).toBe(false);
+      }
+    });
+
+    it('flags unused on an unread skill when a peer has reads and grace has passed', async () => {
+      const usage = new InMemoryUsageCollector();
+      usage.seed([{ skillId: 'design', source: 'claude' }]);
+      engine = new CollectionEngine(fs, skills, usage);
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.cursor/skills/design/SKILL.md', '# design\n');
+      engine.scan();
+      engine.create('build', ['tdd', 'design']);
+      backdateFirstCommand(fs, '2020-01-01T00:00:00.000Z');
+      engine = new CollectionEngine(fs, skills, usage);
+
+      const result = await engine.health();
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        const build = result.value.find((row) => row.name === 'build');
+        expect(build?.findings.some((f) => f.type === 'unused' && f.skillId === 'tdd')).toBe(true);
+        expect(build?.findings.some((f) => f.type === 'unused' && f.skillId === 'design')).toBe(false);
+      }
+    });
+
+    it('does not flag unused during grace even when a peer has reads', async () => {
+      const usage = new InMemoryUsageCollector();
+      usage.seed([{ skillId: 'design', source: 'claude' }]);
+      engine = new CollectionEngine(fs, skills, usage);
+      fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+      fs.writeFile('.cursor/skills/design/SKILL.md', '# design\n');
+      engine.scan();
+      engine.create('build', ['tdd', 'design']);
 
       const result = await engine.health();
 
@@ -1604,7 +1666,7 @@ describe('CollectionEngine', () => {
           const build = result.value.find((row) => row.name === 'build');
           expect(build?.usedLlm).toBe(false);
           expect(build?.findings.some((f) => f.type === 'conflict' || f.type === 'vague-trigger')).toBe(false);
-          expect(build?.findings.some((f) => f.type === 'unused')).toBe(true);
+          expect(build?.findings.some((f) => f.type === 'unused')).toBe(false);
         }
       });
 

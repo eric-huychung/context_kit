@@ -247,6 +247,9 @@ export class CollectionEngine implements ICollectionEngine {
       }
     }
 
+    const projectHasUsage = [...usageCounts.values()].some((count) => count > 0);
+    const now = new Date().toISOString();
+
     const report: CommandHealth[] = [];
     for (const command of this.state.commands) {
       const findings = [];
@@ -267,6 +270,9 @@ export class CollectionEngine implements ICollectionEngine {
             body,
             usageCount: usageCounts.get(skillId) ?? 0,
             diskHashes: record ? this.hashesForPaths(record.paths) : new Set<string>(),
+            projectHasUsage,
+            observedAt: unusedObservedAt(record, command.createdAt),
+            now,
           })
         );
         llmInputs.push({ skillId, description, body });
@@ -1408,6 +1414,17 @@ export class CollectionEngine implements ICollectionEngine {
       }
     }
   }
+}
+
+/** Earliest deploy stamp, else the command's createdAt. Missing stamp = treat as old at the finding layer. */
+function unusedObservedAt(record: SkillRecord | undefined, commandCreatedAt: string): string | undefined {
+  let earliest: string | undefined;
+  for (const deploy of record?.deployedTo ?? []) {
+    if (deploy.installedAt && (earliest === undefined || deploy.installedAt < earliest)) {
+      earliest = deploy.installedAt;
+    }
+  }
+  return earliest ?? commandCreatedAt;
 }
 
 function listsEqual(a: string[], b: string[]): boolean {

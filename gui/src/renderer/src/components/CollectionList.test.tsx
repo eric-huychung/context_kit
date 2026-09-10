@@ -350,7 +350,7 @@ describe('CollectionList', () => {
 
   it('shows a health strip with token/warn counts on a command row, no LLM key required', async () => {
     const { engine, fs } = createInMemoryWorkspace();
-    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\nkey: sk-abcdefghijklmnopqrstuvwx\n');
     engine.scan();
     engine.create('build', ['tdd']);
     const bridge = createTestBridge(engine);
@@ -359,14 +359,13 @@ describe('CollectionList', () => {
 
     const row = await screen.findByRole('listitem', { name: 'Command build' });
     await waitFor(() => expect(within(row).getByLabelText(/warning/)).toBeInTheDocument());
-    // tdd is filed but never read, so 'unused' always fires.
     expect(within(row).getByLabelText(/1 warning/)).toBeInTheDocument();
   });
 
   it('lists health findings in the detail panel with a confirm-gated disable action', async () => {
     const { engine, fs } = createInMemoryWorkspace();
-    fs.writeFile('.agents/skills/tdd/SKILL.md', '# tdd\n');
-    fs.writeFile('.claude/skills/tdd/SKILL.md', '# tdd\n');
+    fs.writeFile('.agents/skills/tdd/SKILL.md', '# tdd\nkey: sk-abcdefghijklmnopqrstuvwx\n');
+    fs.writeFile('.claude/skills/tdd/SKILL.md', '# tdd\nkey: sk-abcdefghijklmnopqrstuvwx\n');
     engine.scan();
     engine.create('build', ['tdd']);
     const bridge = createTestBridge(engine);
@@ -374,8 +373,8 @@ describe('CollectionList', () => {
     renderWithProviders(<CollectionList />, { bridge });
     const detail = await screen.findByRole('region', { name: 'Command build details' });
 
-    await waitFor(() => expect(within(detail).getByText(/unused/)).toBeInTheDocument());
-    expect(within(detail).getByText(/No recorded reads/)).toBeInTheDocument();
+    await waitFor(() => expect(within(detail).getByText(/secret/i)).toBeInTheDocument());
+    expect(within(detail).getByText(/secret-shaped/i)).toBeInTheDocument();
 
     await userEvent.click(within(detail).getByRole('button', { name: 'Disable' }));
     expect(await screen.findByRole('dialog', { name: 'Disable tdd?' })).toBeInTheDocument();
@@ -387,7 +386,7 @@ describe('CollectionList', () => {
 
   it('cancels a finding action without mutating the map', async () => {
     const { engine, fs } = createInMemoryWorkspace();
-    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+    fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\nkey: sk-abcdefghijklmnopqrstuvwx\n');
     engine.scan();
     engine.create('build', ['tdd']);
     const bridge = createTestBridge(engine);

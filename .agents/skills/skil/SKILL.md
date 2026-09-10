@@ -47,7 +47,7 @@ skil doctor          # one row per command: token-ish cost + warning count
 skil doctor build    # that command's findings, one line why each
 ```
 
-Runs entirely on math + regex, no API key required: **idle-cost** (long always-loaded descriptions), **fat-body** (oversized `SKILL.md`), **unused** (`usage()` is zero for that filed skill), **hash-split** (a skill's live/leftover/parked copies disagree), **secret** (a vendor-key-shaped string in the body). Read-only — nothing is persisted or rewritten.
+Runs entirely on math + regex, no API key required: **idle-cost** (long always-loaded descriptions), **fat-body** (oversized `SKILL.md`), **unused** (filed skill with no reads — only after this project has usage history and a 14-day grace), **hash-split** (a skill's live/leftover/parked copies disagree), **secret** (a vendor-key-shaped string in the body). Read-only — nothing is persisted or rewritten.
 
 Set `SKIL_LLM_PROVIDER` (`anthropic` | `openai` | `openrouter`) and `SKIL_LLM_API_KEY` in the environment (or save a key from the GUI's header gear) to unlock two more finding types automatically: **conflict** (two filed skills whose triggers overlap or contradict) and **vague-trigger** (a description too generic to reliably fire). No key means `skil doctor`'s output is unchanged — never a smaller/crippled report, just missing those two types.
 
