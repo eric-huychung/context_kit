@@ -72,6 +72,19 @@ describe('createProgram', () => {
     expect(helpFor(['list'])).not.toMatch(/\s--ide\b/);
   });
 
+  it('rules and skills have enable/disable, not show', () => {
+    const program = createProgram(buildEngine());
+    const names = (cmd: string) =>
+      program.commands.find((command) => command.name() === cmd)?.commands.map((command) => command.name()) ?? [];
+
+    expect(names('rules')).toEqual(expect.arrayContaining(['enable', 'disable']));
+    expect(names('rules')).not.toContain('show');
+    expect(names('skills')).toEqual(expect.arrayContaining(['enable', 'disable']));
+    expect(names('skills')).not.toContain('show');
+    expect(helpFor(['rules'])).not.toMatch(/^\s*show\b/m);
+    expect(helpFor(['skills'])).not.toMatch(/^\s*show\b/m);
+  });
+
   it('rejects an unknown --to on install before calling the engine', () => {
     const engine = buildEngine();
     const program = createProgram(engine);
