@@ -54,6 +54,7 @@ describe('createProgram', () => {
     expect(program.name()).toBe('skil');
     expect(output).toContain('Usage: skil');
     expect(output).toContain('rules');
+    expect(output).toContain('skills');
     expect(output).toContain('delete');
     expect(output).toContain('scan');
     expect(output).toContain('enable');
