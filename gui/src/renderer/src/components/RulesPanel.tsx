@@ -8,6 +8,7 @@ import { FOCUS_RING } from '../lib/focus-ring';
 import { groupRulesByFolder, ruleFileName } from '../lib/rule-folders';
 import { StatusNotice, StatusSkeleton } from '../../../../../shared/status';
 import { estimateTokensFromMarkdown, findingsForSkill, formatTokenCount } from '../lib/skill-health';
+import { loadHealth, invalidateHealth } from '../lib/health-query';
 import type { HealthReport, RuleRecord } from '../../../shared/ipc';
 import { HealthBanner, HealthMark, rowsForSkill, type HealthFindingRow } from './HealthWarning';
 
@@ -155,12 +156,14 @@ export default function RulesPanel({ onProjectBound: _onProjectBound }: { onProj
 
   const refresh = useCallback(async () => {
     const id = ++refreshId.current;
-    const [next, nextHealth] = await Promise.all([bridge.listRules(), bridge.health()]);
+    const next = await bridge.listRules();
     if (id !== refreshId.current) return;
     setRules(next);
     setSelectedId((current) => (current && next.some((rule) => rule.id === current) ? current : null));
-    const report: HealthReport = nextHealth.ok ? nextHealth.value : [];
-    setHealthReport(report);
+    void loadHealth(bridge).then((report) => {
+      if (id !== refreshId.current) return;
+      setHealthReport(report);
+    });
   }, [bridge]);
 
   useEffect(() => {
@@ -169,6 +172,7 @@ export default function RulesPanel({ onProjectBound: _onProjectBound }: { onProj
 
   useEffect(() => {
     return bridge.onScan(() => {
+      invalidateHealth();
       void refresh();
     });
   }, [bridge, refresh]);
@@ -180,6 +184,7 @@ export default function RulesPanel({ onProjectBound: _onProjectBound }: { onProj
       setToggleError(true);
       return;
     }
+    invalidateHealth();
     await refresh();
   }
 

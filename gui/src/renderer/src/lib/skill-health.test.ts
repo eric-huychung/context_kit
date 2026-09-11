@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   activeFindings,
-  commandsForSkill,
   estimateTokensFromMarkdown,
   findingIgnoreKey,
   findingsForSkill,
-  flaggedIdsFromHealth,
   formatTokenCount,
   isLlmFinding,
 } from './skill-health';
@@ -41,27 +39,6 @@ describe('findingsForSkill', () => {
 
   it('returns empty when the skill is not named in any command health row', () => {
     expect(findingsForSkill(REPORT, 'missing')).toEqual([]);
-  });
-});
-
-describe('commandsForSkill', () => {
-  it('lists every command the skill is filed on', () => {
-    expect(
-      commandsForSkill(
-        [
-          { name: 'build', skills: ['tdd', 'ui'] },
-          { name: 'review', skills: ['tdd'] },
-          { name: 'plan', skills: ['ui'] },
-        ],
-        'tdd'
-      )
-    ).toEqual(['build', 'review']);
-  });
-});
-
-describe('flaggedIdsFromHealth', () => {
-  it('unions skill ids across commands', () => {
-    expect(flaggedIdsFromHealth(REPORT)).toEqual(new Set(['tdd', 'ui']));
   });
 });
 

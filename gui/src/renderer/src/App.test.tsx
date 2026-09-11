@@ -41,6 +41,29 @@ describe('App', () => {
     expect(screen.queryByRole('heading', { name: 'Skills' })).not.toBeInTheDocument();
   });
 
+  it('shows a list skeleton on Sync while recents are loading', async () => {
+    let resolveRecents!: (value: string[]) => void;
+    const recentsPromise = new Promise<string[]>((resolve) => {
+      resolveRecents = resolve;
+    });
+    const bridge = {
+      ...createTestBridge(createInMemoryEngine()),
+      listRecentFolders: () => recentsPromise,
+    };
+
+    renderWithProviders(<App />, { bridge });
+    await userEvent.click(screen.getByRole('tab', { name: 'Sync' }));
+
+    expect(screen.getByRole('status', { name: 'Loading sync' })).toBeInTheDocument();
+    expect(screen.queryByText('Skills found')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading\u2026')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pick folder' })).toBeInTheDocument();
+
+    resolveRecents([]);
+    expect(await screen.findByText('Skills found')).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading sync' })).not.toBeInTheDocument();
+  });
+
   it('reflects commands created through the engine without connecting a folder first', async () => {
     const engine = installTestBridge(createInMemoryEngine());
     engine.create('frontend', ['obra/react-patterns']);
@@ -49,6 +72,32 @@ describe('App', () => {
     await openCommandsWorkspace();
 
     expect(await screen.findByRole('listitem', { name: 'Command frontend' })).toBeInTheDocument();
+  });
+
+  it('keeps the command list when leaving Commands and coming back', async () => {
+    const engine = createInMemoryEngine();
+    engine.create('build', ['tdd']);
+    const inner = createTestBridge(engine);
+    let listCalls = 0;
+    const bridge = {
+      ...inner,
+      listCollections: async () => {
+        listCalls += 1;
+        return inner.listCollections();
+      },
+    };
+
+    renderWithProviders(<App />, { bridge });
+    expect(await screen.findByRole('listitem', { name: 'Command build' })).toBeInTheDocument();
+    expect(listCalls).toBe(1);
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Skills' }));
+    expect(await screen.findByRole('heading', { name: 'Skills' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+    expect(screen.getByRole('listitem', { name: 'Command build' })).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading commands' })).not.toBeInTheDocument();
+    expect(listCalls).toBe(1);
   });
 
   it('always shows Discover search without connecting a folder', async () => {
@@ -85,8 +134,9 @@ describe('App', () => {
 
     await userEvent.click(screen.getByRole('tab', { name: 'Skills' }));
     expect(screen.getByRole('tab', { name: 'Skills' })).toHaveAttribute('aria-selected', 'true');
-    expect(await screen.findByRole('heading', { name: 'Skills' })).toBeInTheDocument();
-    expect(screen.getByText('obra/react-patterns')).toBeInTheDocument();
+    const skillsPanel = (await screen.findByRole('heading', { name: 'Skills' })).closest('section');
+    expect(skillsPanel).not.toBeNull();
+    expect(within(skillsPanel as HTMLElement).getByText('obra/react-patterns')).toBeInTheDocument();
   });
 
   it('shows a red Sync rail dot until a folder is connected', async () => {

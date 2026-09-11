@@ -1,9 +1,8 @@
 /** Where a skill originated from. */
-export type SkillSource = 'skills.sh' | 'github' | 'local';
+export type SkillSource = 'skills.sh' | 'local';
 
-/** Docks skil can scan and push to. Product language is dock; `IDE` stays until a rename. */
+/** Roots skil can scan. `IDE` is leftover naming — leftover roots, not a picker. */
 export type IDE = 'cursor' | 'claude' | 'codex' | 'copilot' | 'agents' | 'windsurf';
-export type Dock = IDE;
 
 /** Leaderboard views proxied from skills.sh. */
 export type BrowseView = 'all-time' | 'trending';
@@ -31,7 +30,7 @@ export interface Skill {
 /** Persisted command: one skills list for the project. Not returned to callers. */
 export interface CommandRecord {
   name: string;
-  /** Catalog ids filed on this command. Project SoT — docks are export targets. */
+  /** Catalog ids filed on this command. Project SoT. */
   skills: string[];
   createdAt: string;
   /**
@@ -79,7 +78,7 @@ export interface OriginCheck {
 /** One observed skill read. Aggregated by `engine.usage()`. */
 export interface UsageEvent {
   skillId: string;
-  source: 'claude' | 'cursor';
+  source: 'claude';
 }
 
 /** Temporary alias so CLI/GUI keep typechecking while copy catches up. */
@@ -247,10 +246,3 @@ export interface State {
   installedSkills: Skill[];
 }
 
-/** Outcome of an export. Product `exportCommand` puts the command file and any copied/installed skill paths in `succeeded`. */
-export interface ExportResult {
-  /** Written command-file / skill dest paths (`exportCommand`). */
-  succeeded: string[];
-  /** Skill deploy failures. The command file may still have been written. */
-  failures: string[];
-}

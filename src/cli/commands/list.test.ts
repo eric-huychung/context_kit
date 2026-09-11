@@ -32,15 +32,6 @@ describe('runList', () => {
     expect(outcome.message).toContain('1');
   });
 
-  it('shows a placeholder for a collection with no command template', () => {
-    const engine = buildEngine();
-    engine.create('frontend', []);
-
-    const outcome = runList(engine);
-
-    expect(outcome.message).toContain('—');
-  });
-
   it('shows on/off for each command', () => {
     const engine = buildEngine();
     engine.create('frontend', []);

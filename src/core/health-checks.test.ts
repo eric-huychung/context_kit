@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { computeLlmFindings, computeSkillFindings, estimateTokens, parseDescription } from './health-checks.js';
+import { describe, expect, it, vi } from 'vitest';
+import { computeLlmFindings, computeSkillFindings, estimateTokens, llmFindingsCacheKey, parseDescription } from './health-checks.js';
 import { isErr, isOk, ok, err } from './result.js';
 import type { LlmChat } from '../llm/llm-chat.js';
 
@@ -120,9 +120,14 @@ describe('computeSkillFindings', () => {
 
 describe('computeLlmFindings', () => {
   const skills = [
-    { skillId: 'tdd', description: 'Use for test-driven development.', body: '# tdd\n' },
-    { skillId: 'testing/refactor', description: 'Use for refactoring code under test.', body: '# refactor\n' },
+    { skillId: 'tdd', description: 'Use for test-driven development.' },
+    { skillId: 'testing/refactor', description: 'Use for refactoring code under test.' },
   ];
+  const build = [{ name: 'build', skills }];
+
+  function buildFindings(result: Awaited<ReturnType<typeof computeLlmFindings>>) {
+    return isOk(result) ? (result.value.build ?? []) : [];
+  }
 
   it('redacts secret-shaped strings before they are sent to the LLM', async () => {
     const secret = 'sk-abcdefghijklmnopqrstuvwx';
@@ -135,7 +140,7 @@ describe('computeLlmFindings', () => {
     };
 
     await computeLlmFindings(
-      [{ skillId: 'tdd', description: `Use ${secret}`, body: `key: ${secret}\n# rest` }],
+      [{ name: 'build', skills: [{ skillId: 'tdd', description: `Use ${secret}` }] }],
       chat,
     );
 
@@ -143,20 +148,40 @@ describe('computeLlmFindings', () => {
     expect(user).toContain('[redacted]');
   });
 
+  it('sends id + description only — not skill bodies', async () => {
+    let user = '';
+    const chat: LlmChat = {
+      complete: async (opts) => {
+        user = opts.user;
+        return ok('{"conflicts":[],"vague":[]}');
+      },
+    };
+
+    await computeLlmFindings(
+      [{ name: 'build', skills: [{ skillId: 'tdd', description: 'Use for tdd.' }] }],
+      chat,
+    );
+
+    const payload = JSON.parse(user) as Array<{ skills: Array<Record<string, unknown>> }>;
+    expect(payload[0]?.skills[0]).toEqual({ id: 'tdd', description: 'Use for tdd.' });
+    expect(user).not.toContain('body');
+    expect(user).not.toContain('bodyExcerpt');
+  });
+
   it('returns no findings without calling the LLM when there are no filed skills', async () => {
     const chat: LlmChat = { complete: async () => err(new Error('should not be called')) };
 
     const result = await computeLlmFindings([], chat);
 
-    expect(isOk(result) && result.value).toEqual([]);
+    expect(isOk(result) && result.value).toEqual({});
   });
 
   it('returns empty conflicts/vague as no findings', async () => {
     const chat = fakeLlmChat(JSON.stringify({ conflicts: [], vague: [] }));
 
-    const result = await computeLlmFindings(skills, chat);
+    const result = await computeLlmFindings(build, chat);
 
-    expect(isOk(result) && result.value).toEqual([]);
+    expect(buildFindings(result)).toEqual([]);
   });
 
   it('turns a conflict pair into one finding per skill', async () => {
@@ -164,23 +189,20 @@ describe('computeLlmFindings', () => {
       JSON.stringify({ conflicts: [{ a: 'tdd', b: 'testing/refactor', why: 'both claim to own the test loop' }], vague: [] })
     );
 
-    const result = await computeLlmFindings(skills, chat);
+    const result = await computeLlmFindings(build, chat);
 
-    expect(isOk(result)).toBe(true);
-    if (isOk(result)) {
-      expect(result.value).toEqual([
-        { type: 'conflict', skillId: 'tdd', message: expect.stringContaining('testing/refactor') },
-        { type: 'conflict', skillId: 'testing/refactor', message: expect.stringContaining('tdd') },
-      ]);
-    }
+    expect(buildFindings(result)).toEqual([
+      { type: 'conflict', skillId: 'tdd', message: expect.stringContaining('testing/refactor') },
+      { type: 'conflict', skillId: 'testing/refactor', message: expect.stringContaining('tdd') },
+    ]);
   });
 
   it('turns a vague entry into one finding', async () => {
     const chat = fakeLlmChat(JSON.stringify({ conflicts: [], vague: [{ id: 'tdd', why: 'description is too generic' }] }));
 
-    const result = await computeLlmFindings(skills, chat);
+    const result = await computeLlmFindings(build, chat);
 
-    expect(isOk(result) && result.value).toEqual([{ type: 'vague-trigger', skillId: 'tdd', message: 'description is too generic' }]);
+    expect(buildFindings(result)).toEqual([{ type: 'vague-trigger', skillId: 'tdd', message: 'description is too generic' }]);
   });
 
   it('drops rows referencing an id that was not in the input', async () => {
@@ -188,24 +210,64 @@ describe('computeLlmFindings', () => {
       JSON.stringify({ conflicts: [{ a: 'tdd', b: 'not-filed', why: 'x' }], vague: [{ id: 'not-filed', why: 'x' }] })
     );
 
-    const result = await computeLlmFindings(skills, chat);
+    const result = await computeLlmFindings(build, chat);
 
-    expect(isOk(result) && result.value).toEqual([]);
+    expect(buildFindings(result)).toEqual([]);
   });
 
   it('returns no findings, not a crash, on non-JSON output', async () => {
     const chat = fakeLlmChat('not json');
 
-    const result = await computeLlmFindings(skills, chat);
+    const result = await computeLlmFindings(build, chat);
 
-    expect(isOk(result) && result.value).toEqual([]);
+    expect(buildFindings(result)).toEqual([]);
   });
 
   it('propagates an LLM call failure as an Err', async () => {
     const chat: LlmChat = { complete: async () => err(new Error('LlmChat: openai rejected the API key (401).')) };
 
-    const result = await computeLlmFindings(skills, chat);
+    const result = await computeLlmFindings(build, chat);
 
     expect(isErr(result)).toBe(true);
+  });
+
+  it('makes one LLM call for every command with filed skills, and keeps conflicts intra-command', async () => {
+    const complete = vi.fn(async () =>
+      ok(
+        JSON.stringify({
+          conflicts: [{ a: 'tdd', b: 'testing/refactor', why: 'same trigger' }],
+          vague: [{ id: 'review', why: 'too generic' }],
+        })
+      )
+    );
+    const chat: LlmChat = { complete };
+
+    const result = await computeLlmFindings(
+      [
+        { name: 'build', skills },
+        { name: 'review', skills: [{ skillId: 'review', description: 'helps with code' }] },
+      ],
+      chat
+    );
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(isOk(result)).toBe(true);
+    if (isOk(result)) {
+      expect(result.value.build).toEqual([
+        { type: 'conflict', skillId: 'tdd', message: expect.stringContaining('testing/refactor') },
+        { type: 'conflict', skillId: 'testing/refactor', message: expect.stringContaining('tdd') },
+      ]);
+      expect(result.value.review).toEqual([{ type: 'vague-trigger', skillId: 'review', message: 'too generic' }]);
+    }
+  });
+});
+
+describe('llmFindingsCacheKey', () => {
+  it('is stable for the same prompt payload and changes when a description changes', () => {
+    const build = [{ name: 'build', skills: [{ skillId: 'tdd', description: 'Use for tdd.' }] }];
+    expect(llmFindingsCacheKey(build)).toBe(llmFindingsCacheKey(build));
+    expect(llmFindingsCacheKey(build)).not.toBe(
+      llmFindingsCacheKey([{ name: 'build', skills: [{ skillId: 'tdd', description: 'Use for tests.' }] }])
+    );
   });
 });

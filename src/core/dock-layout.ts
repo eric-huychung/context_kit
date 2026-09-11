@@ -20,20 +20,6 @@ export const SKILL_ROOT_BY_IDE: Record<IDE, string> = {
 };
 
 /**
- * Project dirs used by `npx skills add --agent`. Cursor, Codex, and Copilot
- * write `.agents/skills`, not their dock folders. Folder name is the last id
- * segment.
- */
-export const NPX_PROJECT_SKILL_ROOT: Record<IDE, string> = {
-  cursor: '.agents/skills',
-  claude: '.claude/skills',
-  codex: '.agents/skills',
-  copilot: '.agents/skills',
-  agents: '.agents/skills',
-  windsurf: '.windsurf/skills',
-};
-
-/**
  * Where we write our command file. Codex has no project-file mechanism for
  * commands. Copilot writes a VS Code prompt file.
  */

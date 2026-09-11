@@ -9,13 +9,12 @@ export function runList(engine: ICollectionEngine): CommandOutcome {
     return { message: 'No commands yet', isError: false, isInfo: true };
   }
 
-  const table = new Table({ head: ['Name', 'On', 'Skills', 'Command'] });
+  const table = new Table({ head: ['Name', 'On', 'Skills'] });
   for (const collection of collections) {
     table.push([
       collection.name,
       collection.enabled ? 'yes' : 'no',
       String(collection.skills.length),
-      collection.command ?? '—',
     ]);
   }
 

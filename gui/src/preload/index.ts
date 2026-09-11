@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { IPC_CHANNELS, type SkilBridge, type ScanResult } from '../shared/ipc.js';
 
+/** Preload is the only place new `window.skil` methods become callable. Renderer HMR cannot add them. */
+
 const bridge: SkilBridge = {
   listCollections: () => ipcRenderer.invoke(IPC_CHANNELS.listCollections),
   createCollection: (name, skillIds) => ipcRenderer.invoke(IPC_CHANNELS.createCollection, name, skillIds),
@@ -13,7 +15,6 @@ const bridge: SkilBridge = {
   addSkill: (name, skillId) => ipcRenderer.invoke(IPC_CHANNELS.addSkill, name, skillId),
   deleteCollection: (name) => ipcRenderer.invoke(IPC_CHANNELS.deleteCollection, name),
   pickProjectFolder: () => ipcRenderer.invoke(IPC_CHANNELS.pickProjectFolder),
-  pickDestinationFolder: () => ipcRenderer.invoke(IPC_CHANNELS.pickDestinationFolder),
   bindProjectFolder: (path) => ipcRenderer.invoke(IPC_CHANNELS.bindProjectFolder, path),
   getProjectRoot: () => ipcRenderer.invoke(IPC_CHANNELS.getProjectRoot),
   listRecentFolders: () => ipcRenderer.invoke(IPC_CHANNELS.listRecentFolders),
@@ -38,17 +39,17 @@ const bridge: SkilBridge = {
   listRules: () => ipcRenderer.invoke(IPC_CHANNELS.listRules),
   readRule: (id) => ipcRenderer.invoke(IPC_CHANNELS.readRule, id),
   setSharedRuleEnabled: (id, enabled) => ipcRenderer.invoke(IPC_CHANNELS.setSharedRuleEnabled, id, enabled),
-  listLeftovers: () => ipcRenderer.invoke(IPC_CHANNELS.listLeftovers),
-  adoptLeftovers: (ids) => ipcRenderer.invoke(IPC_CHANNELS.adoptLeftovers, ids),
   auditSync: () => ipcRenderer.invoke(IPC_CHANNELS.auditSync),
   previewSync: (path) => ipcRenderer.invoke(IPC_CHANNELS.previewSync, path),
   importToCanonical: (ids) => ipcRenderer.invoke(IPC_CHANNELS.importToCanonical, ids),
   removeLeftovers: (paths) => ipcRenderer.invoke(IPC_CHANNELS.removeLeftovers, paths),
   resolveDrift: (id, action, path) => ipcRenderer.invoke(IPC_CHANNELS.resolveDrift, id, action, path),
   health: () => ipcRenderer.invoke(IPC_CHANNELS.health),
-  hasLlmKey: () => ipcRenderer.invoke(IPC_CHANNELS.hasLlmKey),
+  llmStatus: () => ipcRenderer.invoke(IPC_CHANNELS.llmStatus),
   saveLlmSettings: (provider, apiKey) => ipcRenderer.invoke(IPC_CHANNELS.saveLlmSettings, provider, apiKey),
-  pingLlm: () => ipcRenderer.invoke(IPC_CHANNELS.pingLlm),
+  setActiveLlmKey: (id) => ipcRenderer.invoke(IPC_CHANNELS.setActiveLlmKey, id),
+  revealLlmKey: (id) => ipcRenderer.invoke(IPC_CHANNELS.revealLlmKey, id),
+  removeLlmKey: (id) => ipcRenderer.invoke(IPC_CHANNELS.removeLlmKey, id),
   suggest: (shelves, role) => ipcRenderer.invoke(IPC_CHANNELS.suggest, shelves, role),
 };
 

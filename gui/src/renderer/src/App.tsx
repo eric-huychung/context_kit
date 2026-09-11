@@ -5,7 +5,7 @@ import { useTheme } from './theme';
 import { useBridge } from './bridge-context';
 import { FOCUS_RING } from './lib/focus-ring';
 import { countSkillsBySource, formatScannedAt } from './lib/skill-sources';
-import { statusLine } from '../../../../shared/status';
+import { statusLine, StatusSkeleton } from '../../../../shared/status';
 import { folderLabel, folderPreview } from '../../shared/recent-folders';
 import type { DriftAction, SkillRecord, SyncAudit } from '../../shared/ipc';
 import CollectionList from './components/CollectionList';
@@ -61,8 +61,8 @@ function ConfigPanel({
 }) {
   const bridge = useBridge();
   const connected = Boolean(root);
-  const [skills, setSkills] = useState<SkillRecord[]>([]);
-  const [recents, setRecents] = useState<string[]>([]);
+  const [skills, setSkills] = useState<SkillRecord[] | null>(null);
+  const [recents, setRecents] = useState<string[] | null>(null);
   const [pendingSwitch, setPendingSwitch] = useState<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [cleanupOpen, setCleanupOpen] = useState(false);
@@ -127,6 +127,7 @@ function ConfigPanel({
       return;
     }
     let cancelled = false;
+    setSkills(null);
     void bridge.listSkills().then((next) => {
       if (!cancelled) setSkills(next);
     });
@@ -149,8 +150,10 @@ function ConfigPanel({
     if (!audit || audit.rows.length === 0) setCleanupOpen(false);
   }, [audit]);
 
-  const bySource = countSkillsBySource(skills);
+  const loadedSkills = skills ?? [];
+  const bySource = countSkillsBySource(loadedSkills);
   const maxSourceCount = Math.max(...bySource.map((row) => row.count), 1);
+  const syncLoading = recents === null || (connected && skills === null);
 
   return (
     <section className="config-panel panel-section">
@@ -170,7 +173,9 @@ function ConfigPanel({
         )}
       </div>
 
-      {recents.length > 0 && (
+      {syncLoading && <StatusSkeleton label="Loading sync" />}
+
+      {!syncLoading && recents && recents.length > 0 && (
         <section className="recent-folders" aria-labelledby="recent-folders-title">
           <h2 id="recent-folders-title">Recent folders</h2>
           <p className="muted-copy">Last five project folders. Click to switch, or remove from this list.</p>
@@ -270,31 +275,33 @@ function ConfigPanel({
         </button>
       </div>
 
-      <div className="sync-metrics">
-        <div className="skills-found-card glass-panel">
-          <Cube size={16} weight="regular" className="found-icon" aria-hidden="true" />
-          <p className="found-value">{skills.length}</p>
-          <p className="found-label">Skills found</p>
-        </div>
-        <div className="skills-source-card glass-panel">
-          <h2>Skills by source</h2>
-          <p className="muted-copy">Where each skill was discovered across your agent config folders.</p>
-          <div className="source-list">
-            {bySource.map(({ source, count }) => (
-              <div className="source-row" key={source}>
-                <span className="source-name">{source}</span>
-                <div className="source-bar" aria-hidden="true">
-                  <div
-                    className="source-bar-fill"
-                    style={{ width: `${(count / maxSourceCount) * 100}%` }}
-                  />
+      {!syncLoading && (
+        <div className="sync-metrics">
+          <div className="skills-found-card glass-panel">
+            <Cube size={16} weight="regular" className="found-icon" aria-hidden="true" />
+            <p className="found-value">{loadedSkills.length}</p>
+            <p className="found-label">Skills found</p>
+          </div>
+          <div className="skills-source-card glass-panel">
+            <h2>Skills by source</h2>
+            <p className="muted-copy">Where each skill was discovered across your agent config folders.</p>
+            <div className="source-list">
+              {bySource.map(({ source, count }) => (
+                <div className="source-row" key={source}>
+                  <span className="source-name">{source}</span>
+                  <div className="source-bar" aria-hidden="true">
+                    <div
+                      className="source-bar-fill"
+                      style={{ width: `${(count / maxSourceCount) * 100}%` }}
+                    />
+                  </div>
+                  <span className="source-count">{count}</span>
                 </div>
-                <span className="source-count">{count}</span>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {cleanupOpen && audit &&
         createPortal(
@@ -580,11 +587,11 @@ export default function App() {
 
         {tab === 'inbox' && <InboxPanel key={boundRoot ?? 'session'} />}
 
-        {tab === 'collections' && (
+        <div {...(tab === 'collections' ? { className: 'tab-panel-contents' } : { hidden: true })}>
           <CollectionList key={collectionsVersion} onProjectBound={handleProjectBound}>
             <CreateCollectionForm />
           </CollectionList>
-        )}
+        </div>
 
         {tab === 'rules' && <RulesPanel key={collectionsVersion} onProjectBound={handleProjectBound} />}
 
@@ -619,7 +626,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
         <p className="eyebrow">Support</p>
         <h2 id="help-title">How can we help?</h2>
         <p className="muted-copy">
-          Sync, export, and search all run through the same engine the CLI uses.
+          Sync, Discover, and toggle all run through the same engine the CLI uses.
         </p>
         <button type="button" className={`primary-button ${FOCUS_RING}`} onClick={onClose}>
           Close

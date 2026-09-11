@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import CollectionList from './CollectionList';
+import CreateCollectionForm from './CreateCollectionForm';
 import { createInMemoryEngine, createInMemoryWorkspace, createTestBridge, renderWithProviders } from '../test-utils';
 import { InMemoryUsageCollector } from '../../../../../src/adapters/in-memory-usage.js';
-import { isOk } from '../../../../../src/core/result.js';
+import { isOk, type Result } from '../../../../../src/core/result.js';
+import type { Collection, HealthReport } from '../../../shared/ipc';
 
 describe('CollectionList', () => {
   it('shows one command list with no IDE workspace cards', async () => {
@@ -82,6 +84,45 @@ describe('CollectionList', () => {
     expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Format')).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Skills' })).not.toBeInTheDocument();
+  });
+
+  it('shows a list skeleton while commands are loading, not the empty page', async () => {
+    const engine = createInMemoryEngine();
+    let resolveCollections!: (value: Collection[]) => void;
+    const collectionsPromise = new Promise<Collection[]>((resolve) => {
+      resolveCollections = resolve;
+    });
+    const bridge = { ...createTestBridge(engine), listCollections: () => collectionsPromise };
+
+    renderWithProviders(
+      <CollectionList>
+        <CreateCollectionForm />
+      </CollectionList>,
+      { bridge },
+    );
+
+    expect(screen.getByRole('status', { name: 'Loading commands' })).toBeInTheDocument();
+    expect(screen.queryByText('No commands yet')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading\u2026')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create New Command' })).not.toBeInTheDocument();
+
+    resolveCollections([]);
+    expect(await screen.findByText('No commands yet')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create New Command' })).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading commands' })).not.toBeInTheDocument();
+  });
+
+  it('renders the command list without waiting for doctor', async () => {
+    const engine = createInMemoryEngine();
+    engine.create('build', ['tdd']);
+    const bridge = {
+      ...createTestBridge(engine),
+      health: () => new Promise<Result<HealthReport>>(() => {}),
+    };
+
+    renderWithProviders(<CollectionList />, { bridge });
+
+    expect(await screen.findByRole('listitem', { name: 'Command build' })).toBeInTheDocument();
   });
 
   it('renders one card per command and shows the selected command skills in the detail panel', async () => {

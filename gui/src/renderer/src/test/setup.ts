@@ -1,6 +1,7 @@
 import { afterEach } from 'vitest';
 import { cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
+import { invalidateHealth } from '../lib/health-query';
 
 // vitest.config.ts doesn't enable `test.globals`, so testing-library's
 // automatic afterEach cleanup (which detects a global `afterEach`) never
@@ -9,6 +10,7 @@ import '@testing-library/jest-dom/vitest';
 afterEach(() => {
   cleanup();
   window.localStorage?.clear();
+  invalidateHealth();
 });
 
 // Newer Node versions ship an experimental built-in `localStorage` that

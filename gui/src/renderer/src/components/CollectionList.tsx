@@ -14,7 +14,8 @@ import {
 import { useBridge } from '../bridge-context';
 import { FOCUS_RING } from '../lib/focus-ring';
 import { conflictLabels, isCommandNameCollision } from '../lib/command-conflicts';
-import { statusLine } from '../../../../../shared/status';
+import { loadHealth, invalidateHealth } from '../lib/health-query';
+import { statusLine, StatusSkeleton } from '../../../../../shared/status';
 import { groupCommandsByStage } from '../lib/sdlc';
 import { findingsForSkill, formatTokenCount } from '../lib/skill-health';
 import { skillPathState } from '../lib/skill-sources';
@@ -444,18 +445,17 @@ export default function CollectionList({
 
   const refresh = useCallback(async () => {
     const id = ++refreshId.current;
-    const [nextSkills, next, nextHealth] = await Promise.all([
-      bridge.listSkills(),
-      bridge.listCollections(),
-      bridge.health(),
-    ]);
+    const [nextSkills, next] = await Promise.all([bridge.listSkills(), bridge.listCollections()]);
     if (id !== refreshId.current) return;
     setSkillCatalog(nextSkills);
     setCollections(next);
-    setHealth(nextHealth.ok ? Object.fromEntries(nextHealth.value.map((row) => [row.name, row])) : {});
     setSelectedName((current) => {
       if (current && next.some((collection) => collection.name === current)) return current;
       return next[0]?.name ?? null;
+    });
+    void loadHealth(bridge).then((report) => {
+      if (id !== refreshId.current) return;
+      setHealth(Object.fromEntries(report.map((row) => [row.name, row])));
     });
   }, [bridge]);
 
@@ -465,15 +465,21 @@ export default function CollectionList({
 
   useEffect(() => {
     return bridge.onScan(() => {
+      invalidateHealth();
       void refresh();
     });
   }, [bridge, refresh]);
+
+  async function reload() {
+    invalidateHealth();
+    await refresh();
+  }
 
   async function handleListToggle(collection: Collection) {
     setTogglingName(collection.name);
     try {
       await bridge.setCommandEnabled(collection.name, !collection.enabled);
-      await refresh();
+      await reload();
     } finally {
       setTogglingName(null);
     }
@@ -482,7 +488,7 @@ export default function CollectionList({
   const createSlot = isValidElement(children)
     ? cloneElement(children as ReactElement<{ onCreated?: (collection: Collection) => void }>, {
         onCreated: () => {
-          void refresh();
+          void reload();
         },
       })
     : children;
@@ -492,7 +498,9 @@ export default function CollectionList({
   return (
     <>
       <CollectionsPanel>
-        {collections === null ? null : collections.length === 0 ? (
+        {collections === null ? (
+          <StatusSkeleton variant="list" label="Loading commands" />
+        ) : collections.length === 0 ? (
           <p className="muted-copy">No commands yet</p>
         ) : (
           <div className="command-stages">
@@ -533,18 +541,22 @@ export default function CollectionList({
             ))}
           </div>
         )}
-        {createSlot}
+        {collections !== null && createSlot}
       </CollectionsPanel>
-      {selected && (
-        <CollectionDetail
-          key={selected.name}
-          collection={selected}
-          inbox={inbox}
-          skillCatalog={skillCatalog}
-          health={health[selected.name]}
-          onChange={refresh}
-          onDeleted={refresh}
-        />
+      {collections === null ? (
+        <section className="detail-panel panel-section" aria-hidden="true" />
+      ) : (
+        selected && (
+          <CollectionDetail
+            key={selected.name}
+            collection={selected}
+            inbox={inbox}
+            skillCatalog={skillCatalog}
+            health={health[selected.name]}
+            onChange={reload}
+            onDeleted={reload}
+          />
+        )
       )}
     </>
   );

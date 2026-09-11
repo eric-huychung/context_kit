@@ -1,7 +1,10 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent, type MouseEvent } from 'react';
+import { createPortal } from 'react-dom';
+import { CircleNotch, Eye, EyeSlash, ToggleLeft, ToggleRight, Trash } from '@phosphor-icons/react';
 import { useBridge } from '../bridge-context';
 import { FOCUS_RING } from '../lib/focus-ring';
-import type { LlmProvider } from '../../../shared/ipc';
+import type { LlmKeyRow, LlmProvider, LlmStatus } from '../../../shared/ipc';
+import { StatusSkeleton } from '../../../../../shared/status';
 
 const PROVIDERS: { id: LlmProvider; label: string }[] = [
   { id: 'anthropic', label: 'Anthropic' },
@@ -9,46 +12,159 @@ const PROVIDERS: { id: LlmProvider; label: string }[] = [
   { id: 'openrouter', label: 'OpenRouter' },
 ];
 
-type Status = { kind: 'idle' } | { kind: 'saving' } | { kind: 'success' } | { kind: 'error'; message: string };
+type FormStatus = { kind: 'idle' } | { kind: 'saving' } | { kind: 'error'; message: string };
+
+function providerLabel(id: LlmProvider): string {
+  return PROVIDERS.find((item) => item.id === id)?.label ?? id;
+}
+
+function keyMask(row: LlmKeyRow): string {
+  return row.keyHint ? `sk-••••${row.keyHint}` : 'sk-••••';
+}
+
+function rowLabel(row: LlmKeyRow): string {
+  return `${providerLabel(row.provider)} ${keyMask(row)}`;
+}
+
+/** Same On/Off control as commands and skills. One key on at a time. */
+function LlmKeyToggle({
+  row,
+  on,
+  busy,
+  onToggle,
+}: {
+  row: LlmKeyRow;
+  on: boolean;
+  busy: boolean;
+  onToggle: () => void;
+}) {
+  const label = rowLabel(row);
+  return (
+    <button
+      type="button"
+      className={`always-on-toggle ${on ? 'on' : 'off'} ${FOCUS_RING}`}
+      aria-pressed={on}
+      aria-busy={busy || undefined}
+      disabled={busy}
+      aria-label={on ? `Turn off ${label}` : `Turn on ${label}`}
+      onClick={(event: MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        onToggle();
+      }}
+    >
+      {busy ? (
+        <CircleNotch size={18} weight="regular" className="spin" aria-hidden="true" />
+      ) : on ? (
+        <ToggleRight size={18} weight="fill" aria-hidden="true" />
+      ) : (
+        <ToggleLeft size={18} weight="regular" aria-hidden="true" />
+      )}
+      {busy ? null : on ? 'On' : 'Off'}
+    </button>
+  );
+}
 
 /**
- * Settings workspace tab: BYOK for doctor's LLM slice. Provider + key,
- * Save also pings (1-token call) so a bad key fails clearly right away.
- * The renderer never re-reads the key after Save — only `hasLlmKey()`'s
- * boolean.
+ * One row per key: provider, masked key, eye, on/off. Add is the same
+ * row with Save. Renderer never sees a raw key until the eye is clicked.
  */
 export default function SettingsPanel() {
   const bridge = useBridge();
-  const [hasKey, setHasKey] = useState(false);
+  const [llm, setLlm] = useState<LlmStatus | null>(null);
   const [provider, setProvider] = useState<LlmProvider>('anthropic');
   const [apiKey, setApiKey] = useState('');
-  const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [showKey, setShowKey] = useState(false);
+  const [form, setForm] = useState<FormStatus>({ kind: 'idle' });
+  const [revealed, setRevealed] = useState<Record<string, string>>({});
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<LlmKeyRow | null>(null);
 
   useEffect(() => {
-    void bridge.hasLlmKey().then(setHasKey);
+    void bridge.llmStatus().then(setLlm);
   }, [bridge]);
+
+  async function refresh(): Promise<LlmStatus> {
+    const next = await bridge.llmStatus();
+    setLlm(next);
+    return next;
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = apiKey.trim();
     if (!trimmed) return;
 
-    setStatus({ kind: 'saving' });
+    setForm({ kind: 'saving' });
     const saved = await bridge.saveLlmSettings(provider, trimmed);
     if (!saved.ok) {
-      setStatus({ kind: 'error', message: saved.error.message });
+      setForm({ kind: 'error', message: saved.error.message });
       return;
     }
 
-    const pinged = await bridge.pingLlm();
-    if (!pinged.ok) {
-      setStatus({ kind: 'error', message: pinged.error.message });
-      return;
-    }
-
-    setHasKey(true);
+    await refresh();
     setApiKey('');
-    setStatus({ kind: 'success' });
+    setShowKey(false);
+    setForm({ kind: 'idle' });
+  }
+
+  async function handleToggle(id: string): Promise<void> {
+    setTogglingId(id);
+    const result = await bridge.setActiveLlmKey(id);
+    setTogglingId(null);
+    if (!result.ok) {
+      setForm({ kind: 'error', message: result.error.message });
+      return;
+    }
+    await refresh();
+  }
+
+  async function handleReveal(row: LlmKeyRow): Promise<void> {
+    if (revealed[row.id]) {
+      setRevealed((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      return;
+    }
+    try {
+      const result = await bridge.revealLlmKey(row.id);
+      if (!result.ok) {
+        setForm({ kind: 'error', message: result.error.message });
+        return;
+      }
+      if (typeof result.value !== 'string' || result.value.length === 0) {
+        setForm({ kind: 'error', message: 'Restart skil to show saved keys.' });
+        return;
+      }
+      setRevealed((current) => ({ ...current, [row.id]: result.value }));
+    } catch (error) {
+      setForm({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Could not show that key.',
+      });
+    }
+  }
+
+  function closeDelete(): void {
+    setPendingDelete(null);
+  }
+
+  async function handleRemove(): Promise<void> {
+    if (!pendingDelete) return;
+    const id = pendingDelete.id;
+    const result = await bridge.removeLlmKey(id);
+    if (!result.ok) {
+      setForm({ kind: 'error', message: result.error.message });
+      return;
+    }
+    setRevealed((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setPendingDelete(null);
+    await refresh();
   }
 
   return (
@@ -56,29 +172,18 @@ export default function SettingsPanel() {
       <div className="section-heading">
         <div>
           <p className="eyebrow">Settings</p>
-          <h1>LLM key</h1>
-          <p className="workspace-lede">
-            Powers doctor&apos;s conflict and vague-trigger findings. Stored encrypted on this machine, direct to the
-            provider — never through skil&apos;s servers.
-          </p>
+          <h1>LLM</h1>
         </div>
       </div>
 
-      <p className="sync-status">
-        <span className={`sync-status-dot ${hasKey ? 'connected' : 'disconnected'}`} />
-        {hasKey ? 'Key saved' : 'No key saved'}
-      </p>
-
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        <div className="flex flex-col gap-1">
-          <label htmlFor="llm-provider" className="text-sm font-medium">
-            Provider
-          </label>
+      <form onSubmit={handleSubmit} className="llm-key-form">
+        <div className="llm-key-row">
           <select
             id="llm-provider"
+            aria-label="Provider"
             value={provider}
             onChange={(event) => setProvider(event.target.value as LlmProvider)}
-            className={`rounded-md border border-input bg-transparent px-3 py-2 text-sm ${FOCUS_RING}`}
+            className={`llm-key-provider ${FOCUS_RING}`}
           >
             {PROVIDERS.map((item) => (
               <option key={item.id} value={item.id}>
@@ -86,37 +191,119 @@ export default function SettingsPanel() {
               </option>
             ))}
           </select>
-        </div>
-        <div className="flex flex-col gap-1">
-          <label htmlFor="llm-api-key" className="text-sm font-medium">
-            API key
-          </label>
-          <input
-            id="llm-api-key"
-            type="password"
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-            autoComplete="off"
-            placeholder={hasKey ? 'Enter a new key to replace the saved one' : 'sk-...'}
-            className={`rounded-md border border-input bg-transparent px-3 py-2 text-sm ${FOCUS_RING}`}
-          />
-        </div>
-        {status.kind === 'error' && (
-          <p role="alert" className="text-sm text-destructive">
-            {status.message}
-          </p>
-        )}
-        {status.kind === 'success' && <p className="text-sm status-copy-success">Key saved and verified.</p>}
-        <div className="modal-actions">
+          <div className="llm-key-field">
+            <input
+              id="llm-api-key"
+              aria-label="API key"
+              type={showKey ? 'text' : 'password'}
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="sk-…"
+              className={`llm-key-input ${FOCUS_RING}`}
+            />
+            <button
+              type="button"
+              className={`llm-key-visibility ${FOCUS_RING}`}
+              aria-label={showKey ? 'Hide API key' : 'Show API key'}
+              aria-pressed={showKey}
+              onClick={() => setShowKey((current) => !current)}
+            >
+              {showKey ? (
+                <EyeSlash size={16} weight="regular" aria-hidden="true" />
+              ) : (
+                <Eye size={16} weight="regular" aria-hidden="true" />
+              )}
+            </button>
+          </div>
           <button
             type="submit"
             className={`primary-button ${FOCUS_RING}`}
-            disabled={status.kind === 'saving' || !apiKey.trim()}
+            disabled={form.kind === 'saving' || !apiKey.trim()}
           >
-            {status.kind === 'saving' ? 'Saving…' : 'Save + Test'}
+            {form.kind === 'saving' ? 'Saving…' : 'Save'}
           </button>
         </div>
       </form>
+
+      {llm === null ? (
+        <StatusSkeleton label="Loading settings" />
+      ) : llm.keys.length > 0 ? (
+        <ul className="llm-key-list">
+          {llm.keys.map((row) => {
+            const active = row.id === llm.activeId;
+            const plaintext = revealed[row.id];
+            const shown = plaintext ?? keyMask(row);
+            const label = rowLabel(row);
+            return (
+              <li key={row.id} className={`llm-key-item ${active ? 'active' : ''}`}>
+                <span className="llm-key-name">{providerLabel(row.provider)}</span>
+                <code className="llm-key-mask">{shown}</code>
+                <button
+                  type="button"
+                  className={`llm-key-icon ${FOCUS_RING}`}
+                  aria-label={plaintext ? `Hide ${label}` : `Show ${label}`}
+                  aria-pressed={Boolean(plaintext)}
+                  onClick={() => void handleReveal(row)}
+                >
+                  {plaintext ? (
+                    <EyeSlash size={14} weight="regular" aria-hidden="true" />
+                  ) : (
+                    <Eye size={14} weight="regular" aria-hidden="true" />
+                  )}
+                </button>
+                <LlmKeyToggle
+                  row={row}
+                  on={active}
+                  busy={togglingId === row.id}
+                  onToggle={() => void handleToggle(row.id)}
+                />
+                <button
+                  type="button"
+                  className={`llm-key-icon ${FOCUS_RING}`}
+                  aria-label={`Remove ${label}`}
+                  onClick={() => setPendingDelete(row)}
+                >
+                  <Trash size={14} weight="regular" aria-hidden="true" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
+      {form.kind === 'error' ? (
+        <p role="alert" className="text-sm text-destructive">
+          {form.message}
+        </p>
+      ) : null}
+
+      {pendingDelete &&
+        createPortal(
+          <div className="modal-backdrop" role="presentation" onClick={closeDelete}>
+            <div
+              className="help-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-llm-key-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <p className="eyebrow">Settings</p>
+              <h2 id="delete-llm-key-title">Delete {rowLabel(pendingDelete)}?</h2>
+              <p className="muted-copy">This cannot be undone.</p>
+              <div className="modal-actions">
+                <button type="button" className={`outline-button ${FOCUS_RING}`} onClick={closeDelete}>
+                  Cancel
+                </button>
+                <button type="button" className={`primary-button ${FOCUS_RING}`} onClick={() => void handleRemove()}>
+                  Delete key
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </section>
   );
 }

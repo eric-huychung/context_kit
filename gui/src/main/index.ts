@@ -11,12 +11,11 @@ import type { ShelfRole } from '../../../src/backend/market-types.js';
 import { DiskWatch, watchFilesByParent } from '../../../src/watch/disk-watch.js';
 import type { ICollectionEngine } from '../../../src/interfaces/engine.js';
 import type { DriftAction, ScanResult } from '../../../src/types/index.js';
-import { err, isOk } from '../../../src/core/result.js';
-import { pingLlmChat } from '../../../src/llm/llm-chat.js';
+import { isOk } from '../../../src/core/result.js';
 import type { LlmProvider } from '../../../src/llm/llm-chat.js';
 import { IPC_CHANNELS } from '../shared/ipc.js';
 import { forgetFolder, parseRecentFolders, rememberFolder } from '../shared/recent-folders.js';
-import { hasLlmKey, loadLlmChat, saveLlmSettings } from './llm-settings.js';
+import { llmStatus, loadLlmChat, removeLlmKey, revealLlmKey, saveLlmSettings, setActiveLlmKey } from './llm-settings.js';
 
 const WATCH_ROOTS = watchRoots(Object.keys(GLOB_RULE_DIRS));
 
@@ -179,7 +178,6 @@ ipcMain.handle(IPC_CHANNELS.pickProjectFolder, async () => {
   }
   return bindProject(picked);
 });
-ipcMain.handle(IPC_CHANNELS.pickDestinationFolder, () => pickDirectory());
 ipcMain.handle(IPC_CHANNELS.bindProjectFolder, (_event, path: string) => bindProject(path));
 
 ipcMain.handle(IPC_CHANNELS.listCollections, () => currentEngine().list());
@@ -226,6 +224,9 @@ ipcMain.handle(IPC_CHANNELS.scan, () => {
 ipcMain.handle(IPC_CHANNELS.deleteSkill, (_event, skillId: string) => {
   const result = currentEngine().deleteSkill(skillId);
   muteOwnWrites();
+  if (isOk(result)) {
+    notifyScan({ added: [], gone: [skillId], changed: [], alwaysOnWarnings: [] });
+  }
   return result;
 });
 ipcMain.handle(IPC_CHANNELS.usage, () => currentEngine().usage());
@@ -251,12 +252,6 @@ ipcMain.handle(IPC_CHANNELS.setSharedRuleEnabled, (_event, id: string, enabled: 
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.listLeftovers, () => currentEngine().leftovers());
-ipcMain.handle(IPC_CHANNELS.adoptLeftovers, async (_event, ids?: string[]) => {
-  const result = await currentEngine().adoptLeftovers(ids);
-  muteOwnWrites();
-  return result;
-});
 ipcMain.handle(IPC_CHANNELS.auditSync, () => currentEngine().auditSync());
 ipcMain.handle(IPC_CHANNELS.previewSync, (_event, path: string) => currentEngine().previewSync(path));
 ipcMain.handle(IPC_CHANNELS.importToCanonical, async (_event, ids: string[]) => {
@@ -275,20 +270,28 @@ ipcMain.handle(IPC_CHANNELS.resolveDrift, async (_event, id: string, action: Dri
   return result;
 });
 ipcMain.handle(IPC_CHANNELS.health, () => currentEngine().health());
-ipcMain.handle(IPC_CHANNELS.hasLlmKey, () => hasLlmKey());
-ipcMain.handle(IPC_CHANNELS.saveLlmSettings, (_event, provider: LlmProvider, apiKey: string) => {
-  const result = saveLlmSettings(provider, apiKey);
+ipcMain.handle(IPC_CHANNELS.llmStatus, () => llmStatus());
+ipcMain.handle(IPC_CHANNELS.saveLlmSettings, async (_event, provider: LlmProvider, apiKey: string) => {
+  const result = await saveLlmSettings(provider, apiKey);
   if (isOk(result)) {
     rebindLlmChat();
   }
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.pingLlm, async () => {
-  const chat = loadLlmChat();
-  if (!chat) {
-    return err(new Error('No LLM key saved yet.'));
+ipcMain.handle(IPC_CHANNELS.setActiveLlmKey, (_event, id: string) => {
+  const result = setActiveLlmKey(id);
+  if (isOk(result)) {
+    rebindLlmChat();
   }
-  return pingLlmChat(chat);
+  return result;
+});
+ipcMain.handle(IPC_CHANNELS.revealLlmKey, (_event, id: string) => revealLlmKey(id));
+ipcMain.handle(IPC_CHANNELS.removeLlmKey, (_event, id: string) => {
+  const result = removeLlmKey(id);
+  if (isOk(result)) {
+    rebindLlmChat();
+  }
+  return result;
 });
 ipcMain.handle(IPC_CHANNELS.suggest, (_event, shelves: ShelfRole[], role?: string) =>
   currentEngine().suggest(shelves, { role }),

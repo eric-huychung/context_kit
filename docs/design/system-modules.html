@@ -1,0 +1,263 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>skil — module design (current)</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f8fafc;
+    --fg: #172033;
+    --muted: #5b6475;
+    --line: #64748b;
+    --neutral: #e2e8f0;
+    --input: #bfdbfe;
+    --process: #c7d2fe;
+    --storage: #99f6e4;
+    --external: #fde68a;
+    --risk: #fecaca;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a;
+      --fg: #e5e7eb;
+      --muted: #a3adbd;
+      --line: #94a3b8;
+      --neutral: #334155;
+      --input: #1d4ed8;
+      --process: #4338ca;
+      --storage: #0f766e;
+      --external: #92400e;
+      --risk: #991b1b;
+    }
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font:
+      14px/1.4 ui-sans-serif,
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      sans-serif;
+  }
+  main {
+    max-width: 980px;
+    margin: 32px auto;
+    padding: 0 20px 48px;
+  }
+  svg {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+  .title {
+    font-size: 20px;
+    font-weight: 650;
+    fill: var(--fg);
+  }
+  .label {
+    font-size: 14px;
+    font-weight: 600;
+    fill: var(--fg);
+  }
+  .small {
+    font-size: 12px;
+    fill: var(--muted);
+  }
+  .node {
+    stroke: var(--line);
+    stroke-width: 1;
+  }
+  .neutral {
+    fill: var(--neutral);
+  }
+  .input {
+    fill: var(--input);
+  }
+  .process {
+    fill: var(--process);
+  }
+  .storage {
+    fill: var(--storage);
+  }
+  .external {
+    fill: var(--external);
+  }
+  .edge {
+    stroke: var(--line);
+    stroke-width: 1.5;
+    fill: none;
+  }
+  .zone {
+    fill: none;
+    stroke: var(--line);
+    stroke-width: 1;
+    stroke-dasharray: 6 5;
+    opacity: 0.8;
+  }
+  p.note {
+    margin: 16px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+    max-width: 72ch;
+  }
+  code {
+    font-size: 12px;
+  }
+</style>
+<main>
+  <svg viewBox="0 0 920 820" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="diag-title diag-desc">
+    <title id="diag-title">skil module design — current state</title>
+    <desc id="diag-desc">
+      Layered view: thin CLI/GUI/Landing clients call one deep CollectionEngine module.
+      The engine uses FileSystem, Skills, Usage, and optional LlmChat adapters.
+      Disk holds live pair, parked, leftovers, and state. Market index and LLM providers stay external.
+    </desc>
+
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--line)" />
+      </marker>
+    </defs>
+
+    <text class="title" x="24" y="36">skil — module design (current)</text>
+    <text class="small" x="24" y="56">One deep module + thin clients. On/off is a path. Market index is a separate track.</text>
+
+    <!-- connectors (drawn first so they sit behind nodes) -->
+    <path class="edge" d="M 160 168 L 160 208" marker-end="url(#arrow)" />
+    <path class="edge" d="M 400 168 L 400 208" marker-end="url(#arrow)" />
+    <path class="edge" d="M 604 168 L 500 208" marker-end="url(#arrow)" />
+    <text class="small" x="412" y="198">ICollectionEngine</text>
+
+    <path class="edge" d="M 180 320 L 120 368" marker-end="url(#arrow)" />
+    <path class="edge" d="M 340 320 L 288 368" marker-end="url(#arrow)" />
+    <path class="edge" d="M 480 320 L 456 368" marker-end="url(#arrow)" />
+    <path class="edge" d="M 560 320 L 636 368" marker-end="url(#arrow)" />
+
+    <path class="edge" d="M 120 448 L 120 508" marker-end="url(#arrow)" />
+    <path class="edge" d="M 140 448 L 280 508" marker-end="url(#arrow)" />
+    <path class="edge" d="M 160 448 L 440 508" marker-end="url(#arrow)" />
+    <path class="edge" d="M 180 448 L 604 508" marker-end="url(#arrow)" />
+
+    <path class="edge" d="M 288 448 L 288 620" marker-end="url(#arrow)" />
+    <path class="edge" d="M 636 448 L 636 620" marker-end="url(#arrow)" />
+
+    <path class="edge" d="M 700 140 L 808 140 L 808 368" marker-end="url(#arrow)" />
+    <text class="small" x="712" y="132">shelves / search</text>
+
+    <path class="edge" d="M 808 448 L 808 508" marker-end="url(#arrow)" />
+    <path class="edge" d="M 760 448 L 400 620" marker-end="url(#arrow)" />
+
+    <!-- zones -->
+    <rect class="zone" x="24" y="72" width="680" height="108" rx="8" />
+    <text class="small" x="36" y="90">Clients (thin — no catalog logic)</text>
+
+    <rect class="zone" x="24" y="208" width="680" height="120" rx="8" />
+    <text class="small" x="36" y="226">Deep module</text>
+
+    <rect class="zone" x="24" y="348" width="680" height="112" rx="8" />
+    <text class="small" x="36" y="366">Adapters (test seams)</text>
+
+    <rect class="zone" x="24" y="488" width="680" height="100" rx="8" />
+    <text class="small" x="36" y="506">Project disk / SoT split</text>
+
+    <rect class="zone" x="24" y="604" width="680" height="84" rx="8" />
+    <text class="small" x="36" y="622">External (outside the engine)</text>
+
+    <rect class="zone" x="720" y="72" width="176" height="616" rx="8" />
+    <text class="small" x="732" y="90">Market track</text>
+    <text class="small" x="732" y="106">(not the engine)</text>
+
+    <!-- clients -->
+    <rect class="node input" x="48" y="104" width="224" height="56" rx="6" />
+    <text class="label" x="160" y="128" text-anchor="middle">CLI</text>
+    <text class="small" x="160" y="146" text-anchor="middle">Commander → engine</text>
+
+    <rect class="node input" x="288" y="104" width="224" height="56" rx="6" />
+    <text class="label" x="400" y="128" text-anchor="middle">GUI (Electron)</text>
+    <text class="small" x="400" y="146" text-anchor="middle">bridge + DiskWatch</text>
+
+    <rect class="node input" x="528" y="104" width="152" height="56" rx="6" />
+    <text class="label" x="604" y="128" text-anchor="middle">Landing</text>
+    <text class="small" x="604" y="146" text-anchor="middle">web Discover</text>
+
+    <!-- engine -->
+    <rect class="node process" x="48" y="240" width="632" height="72" rx="6" />
+    <text class="label" x="364" y="268" text-anchor="middle">CollectionEngine (ICollectionEngine)</text>
+    <text class="small" x="364" y="288" text-anchor="middle">
+      scan · toggle · file · install · rules · health · suggest · leftovers
+    </text>
+
+    <!-- adapters -->
+    <rect class="node neutral" x="48" y="380" width="144" height="64" rx="6" />
+    <text class="label" x="120" y="406" text-anchor="middle">FileSystem</text>
+    <text class="small" x="120" y="424" text-anchor="middle">real / in-memory</text>
+
+    <rect class="node neutral" x="216" y="380" width="144" height="64" rx="6" />
+    <text class="label" x="288" y="406" text-anchor="middle">SkillsAdapter</text>
+    <text class="small" x="288" y="424" text-anchor="middle">search · browse · npx</text>
+
+    <rect class="node neutral" x="384" y="380" width="144" height="64" rx="6" />
+    <text class="label" x="456" y="406" text-anchor="middle">UsageCollector</text>
+    <text class="small" x="456" y="424" text-anchor="middle">Claude logs</text>
+
+    <rect class="node neutral" x="552" y="380" width="128" height="64" rx="6" />
+    <text class="label" x="616" y="406" text-anchor="middle">LlmChat</text>
+    <text class="small" x="616" y="424" text-anchor="middle">BYOK · optional</text>
+
+    <!-- disk -->
+    <rect class="node storage" x="48" y="520" width="144" height="52" rx="6" />
+    <text class="label" x="120" y="542" text-anchor="middle">Live pair</text>
+    <text class="small" x="120" y="558" text-anchor="middle">.agents + .claude</text>
+
+    <rect class="node storage" x="208" y="520" width="144" height="52" rx="6" />
+    <text class="label" x="280" y="542" text-anchor="middle">Parked</text>
+    <text class="small" x="280" y="558" text-anchor="middle">.skil/parked</text>
+
+    <rect class="node storage" x="368" y="520" width="144" height="52" rx="6" />
+    <text class="label" x="440" y="542" text-anchor="middle">Leftovers</text>
+    <text class="small" x="440" y="558" text-anchor="middle">.cursor / .codex…</text>
+
+    <rect class="node storage" x="528" y="520" width="152" height="52" rx="6" />
+    <text class="label" x="604" y="542" text-anchor="middle">state.json</text>
+    <text class="small" x="604" y="558" text-anchor="middle">catalog + commands</text>
+
+    <!-- external -->
+    <rect class="node external" x="168" y="632" width="240" height="40" rx="6" />
+    <text class="label" x="288" y="658" text-anchor="middle">skills.sh + npx skills (OIDC)</text>
+
+    <rect class="node external" x="520" y="632" width="160" height="40" rx="6" />
+    <text class="label" x="600" y="658" text-anchor="middle">LLM APIs (user key)</text>
+
+    <!-- market track -->
+    <rect class="node external" x="740" y="140" width="136" height="56" rx="6" />
+    <text class="label" x="808" y="164" text-anchor="middle">/api/market/*</text>
+    <text class="small" x="808" y="182" text-anchor="middle">read API</text>
+
+    <rect class="node process" x="740" y="380" width="136" height="64" rx="6" />
+    <text class="label" x="808" y="406" text-anchor="middle">MarketSync</text>
+    <text class="small" x="808" y="424" text-anchor="middle">cron + script</text>
+
+    <rect class="node storage" x="740" y="520" width="136" height="52" rx="6" />
+    <text class="label" x="808" y="542" text-anchor="middle">Supabase</text>
+    <text class="small" x="808" y="558" text-anchor="middle">role → shelf</text>
+
+    <!-- key flows -->
+    <text class="label" x="24" y="730">Key flows</text>
+    <text class="small" x="24" y="750">scan = pull (union live + leftover + parked, write nothing)</text>
+    <text class="small" x="24" y="768">toggle / Discover + = write (live pair on · parked off)</text>
+    <text class="small" x="24" y="786">filing edits command ## Skills only — never enables the skill</text>
+
+    <text class="small" x="520" y="750">SoT: disk owns bodies · engine owns catalog + command list</text>
+    <text class="small" x="520" y="768">createEngine wires adapters once (CLI + GUI share it)</text>
+    <text class="small" x="520" y="786">market index feeds Discover only — never touches catalog</text>
+  </svg>
+
+  <p class="note">
+    Companion prose: <code>docs/design/architecture.md</code>,
+    market track: <code>docs/design/market-index.md</code>.
+    Open this file in a browser.
+  </p>
+</main>

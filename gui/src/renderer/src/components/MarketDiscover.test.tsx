@@ -243,7 +243,7 @@ describe('MarketDiscover', () => {
         ...createTestBridge(engine),
         marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
         getProjectRoot: async () => null,
-        hasLlmKey: async () => false,
+        llmStatus: async () => ({ hasKey: false, enabled: false, provider: 'anthropic' as const, keys: [], activeId: null }),
         suggest,
       };
 
@@ -256,7 +256,7 @@ describe('MarketDiscover', () => {
       expect(suggest).toHaveBeenCalledWith(SHELVES, 'swe');
     });
 
-    it('refetches when the role dropdown changes', async () => {
+    it('refetches when the suggested role chip changes', async () => {
       const engine = createInMemoryEngine();
       const suggest = vi.fn(async (_shelves, role): Promise<Result<SuggestResult>> =>
         ok({ ids: [`pick-${role}`], usedLlm: false })
@@ -273,7 +273,7 @@ describe('MarketDiscover', () => {
       await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
       await waitFor(() => expect(screen.getByText('pick-swe')).toBeInTheDocument());
 
-      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Suggested role' }), 'pm');
+      await userEvent.click(screen.getByRole('tab', { name: 'PM' }));
       await waitFor(() => expect(screen.getByText('pick-pm')).toBeInTheDocument());
       expect(suggest).toHaveBeenCalledTimes(2);
     });
@@ -284,7 +284,7 @@ describe('MarketDiscover', () => {
       const bridge = {
         ...createTestBridge(engine),
         marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
-        hasLlmKey: async () => false,
+        llmStatus: async () => ({ hasKey: false, enabled: false, provider: 'anthropic' as const, keys: [], activeId: null }),
         suggest: async (): Promise<Result<SuggestResult>> =>
           ok({ ids: ['obra/react-patterns'], usedLlm: false }),
       };
@@ -305,7 +305,7 @@ describe('MarketDiscover', () => {
       const bridge = {
         ...createTestBridge(engine),
         marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
-        hasLlmKey: async () => true,
+        llmStatus: async () => ({ hasKey: true, enabled: true, provider: 'anthropic' as const, keys: [], activeId: 'k1' }),
         suggest: async (): Promise<Result<SuggestResult>> =>
           ok({ ids: ['obra/react-patterns'], usedLlm: true }),
       };
@@ -331,7 +331,7 @@ describe('MarketDiscover', () => {
       const bridge = {
         ...createTestBridge(engine),
         marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
-        hasLlmKey: async () => true,
+        llmStatus: async () => ({ hasKey: true, enabled: true, provider: 'anthropic' as const, keys: [], activeId: 'k1' }),
         suggest,
       };
 

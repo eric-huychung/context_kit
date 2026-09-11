@@ -108,10 +108,6 @@ export class SkillsAdapter implements ISkillsAdapter {
     }
   }
 
-  getInstalled(): Skill[] {
-    return [];
-  }
-
   async skillHash(skillId: string): Promise<Result<string | null>> {
     try {
       const response = await axios.get<{ data: { skillMd: string | null } }>(

@@ -22,7 +22,6 @@ const HARDCODED_TRENDING: Skill[] = [
  * Not for production use.
  */
 export class InMemorySkillsAdapter implements ISkillsAdapter {
-  private installed: Skill[] = [];
   private installs: Array<{ skillId: string; cwd?: string }> = [];
   private installError: Error | null = null;
   private searchError: Error | null = null;
@@ -48,12 +47,7 @@ export class InMemorySkillsAdapter implements ISkillsAdapter {
       return err(this.installError);
     }
     this.installs.push({ skillId, ...(opts?.cwd ? { cwd: opts.cwd } : {}) });
-    this.installed.push({ id: skillId, source: 'skills.sh', installedAt: new Date().toISOString() });
     return ok(undefined);
-  }
-
-  getInstalled(): Skill[] {
-    return [...this.installed];
   }
 
   async skillHash(skillId: string): Promise<Result<string | null>> {
@@ -85,14 +79,8 @@ export class InMemorySkillsAdapter implements ISkillsAdapter {
     this.browseError = error;
   }
 
-  /** Test helper: seeds skills as if already installed by external tooling. */
-  seedInstalled(skills: Skill[]): void {
-    this.installed.push(...skills);
-  }
-
   /** Test helper: clears all in-memory state between tests. */
   reset(): void {
-    this.installed = [];
     this.installs = [];
     this.installError = null;
     this.searchError = null;

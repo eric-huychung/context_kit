@@ -12,6 +12,7 @@ import { useBridge } from '../bridge-context';
 import { FOCUS_RING } from '../lib/focus-ring';
 import { groupInboxSkills, skillPathState } from '../lib/skill-sources';
 import { findingsForSkill } from '../lib/skill-health';
+import { loadHealth, invalidateHealth } from '../lib/health-query';
 import type { HealthReport, OriginCheck, OriginStatus, ScanResult, SkillRecord } from '../../../shared/ipc';
 import { StatusNotice, StatusSkeleton } from '../../../../../shared/status';
 import { HealthMark, rowsForSkill } from './HealthWarning';
@@ -54,16 +55,13 @@ export default function InboxPanel() {
   const [toggleErrorId, setToggleErrorId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const [nextCatalog, nextChecks, nextHealth] = await Promise.all([
-      bridge.listSkills(),
-      bridge.originChecks(),
-      bridge.health(),
-    ]);
+    const [nextCatalog, nextChecks] = await Promise.all([bridge.listSkills(), bridge.originChecks()]);
     setCatalog(nextCatalog);
     const checks: OriginCheck[] = nextChecks.ok ? nextChecks.value : [];
     setOriginById(Object.fromEntries(checks.map((check) => [check.skillId, check.status])));
-    const report: HealthReport = nextHealth.ok ? nextHealth.value : [];
-    setHealthReport(report);
+    void loadHealth(bridge).then((report) => {
+      setHealthReport(report);
+    });
   }, [bridge]);
 
   useEffect(() => {
@@ -73,6 +71,7 @@ export default function InboxPanel() {
   useEffect(() => {
     return bridge.onScan((result) => {
       setLastScan(result);
+      invalidateHealth();
       void refresh();
     });
   }, [bridge, refresh]);
@@ -157,6 +156,7 @@ export default function InboxPanel() {
     setPendingUpdate(null);
     setSelectedId(null);
     setIsUpdating(false);
+    invalidateHealth();
     await refresh();
   }
 
@@ -170,6 +170,7 @@ export default function InboxPanel() {
     }
     setPendingDelete(null);
     setSelectedId(null);
+    invalidateHealth();
     await refresh();
   }
 
@@ -182,6 +183,7 @@ export default function InboxPanel() {
         setToggleErrorId(skillId);
         return;
       }
+      invalidateHealth();
       await refresh();
     } finally {
       setTogglingId(null);

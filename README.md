@@ -1,91 +1,121 @@
 # skil
 
-A CLI and desktop GUI for mapping AI skills onto SDLC commands (`/build`, `/tdd`), toggling skills/commands/rules on and off, and pushing to `.agents` + `.claude` at once. No login.
+Give your agent skills a home.
 
-- **Skills** = folders with `SKILL.md`. Disk owns the body. We hash it; we do not edit it. One catalog, many paths.
-- **Commands** = named groups of skill ids, once per project. `/build` is the same list everywhere.
-- **Live pair** = `.agents/skills` + `.claude/skills`. The only two folders skil writes a skill or a human-only command skill into. No dock picker.
-- **On/off is a path, not a flag.** Toggling a skill or command off moves its live pair copy to `.skil/parked/skills/<id>` (or `.skil/parked/commands/<name>`). Toggling on copies it back. There is nothing else to confirm.
-- **Rules** = shared law lives in `AGENTS.md` (togglable sections; `CLAUDE.md` should `@AGENTS.md` instead of duplicating). Path-scoped glob rules (`.cursor/rules/*.mdc`) stay on disk as-is — read-only, never toggled.
-- **Leftovers** = skill/command/rule paths outside the live pair and not parked (e.g. a skill still sitting under `.cursor/skills`). Not on, not off — just an old home we found. `adoptLeftovers` copies it into the live pair and moves the old path to `.skil/deprecated/<original-path>` (recoverable, never scanned again).
-- **Scan** = pull. Unions the live pair, every leftover root, and the parked root into one catalog. Hashes `SKILL.md`, reconciles gone/changed/new. Never writes on its own — only `setSkillEnabled` / `setCommandEnabled` / `setSharedRuleEnabled` / `adoptLeftovers` write.
-- **Install** = pulls a market skill straight into the live pair (`.agents/skills/<id>` + `.claude/skills/<id>`). No staging step.
-- **Usage** = how often catalog skills were read (Claude logs first). Counts only — not "used properly."
-- **Doctor** = `health()` / `skil doctor`. A read-only report per command: idle-cost, fat-body, unused, hash-split, and secret findings, math + regex only — no key needed. Add your own LLM key (BYOK) and it also flags skill-description conflicts and vague triggers.
-- **BYOK** = your own Anthropic/OpenAI/OpenRouter key, used to power doctor's conflict/vague-trigger findings and Suggest's rerank. Direct to the provider, never through skil's servers. CLI reads `SKIL_LLM_PROVIDER` + `SKIL_LLM_API_KEY`; GUI saves it encrypted on the Settings tab. No key, no LLM findings — Suggest still shows editorial picks.
-- **Suggest** = `suggest(shelves)` / `skil suggest` / Discover's Suggested tab. Without a key, editorial picks for a role (`data/market-picks.yaml`). With a BYOK key, fingerprints this project's `package.json` and reranks into a ~15-20 id shortlist not already in your catalog. Never installs anything itself.
+Find skills, file them onto workflows like `/build`, and see which ones still earn their spot.
 
-Bin is `skil`. `contextkit` is an alias of the same entry.
+Open source. macOS app + CLI. No login.
 
-## Loop
+[Website](https://www.skil.website/) · [Source](https://github.com/eric-huychung/skil) · [LinkedIn](https://www.linkedin.com/in/huychung/)
 
-1. Connect a repo (CLI = current directory; GUI = folder picker on Sync).
-2. `skil scan` — rebuild the catalog from `.agents/skills`, `.claude/skills`, `.skil/parked/skills`, and any leftover skill/command/rule paths. The command map stays; this is pull, not team sync.
-3. `skil create build --skills tdd,ui` makes the command. It starts off — no folder anywhere — until you enable it.
-4. `skil add build design` / `skil remove build design` files or unfiles a skill id on the command. Filing does not touch the catalog or install anything.
-5. `skil enable build` writes `/build` as a human-only skill (`disable-model-invocation: true`) into `.agents/skills/build` + `.claude/skills/build`. `skil disable build` parks it under `.skil/parked/commands/build`.
-6. `skil install <skillId>` fetches a market skill straight into the live pair. Toggling an already-installed or already-scanned skill between live and parked (`setSkillEnabled`) is GUI-only today — the CLI's `enable`/`disable` verbs only take a command name.
-7. If scan finds paths outside the live pair and parked root, those are leftovers. Adopt them (GUI: Sync tab) to fold them into the live pair and retire the old path — nothing is silently deleted.
-8. `skil rules` lists `AGENTS.md` shared sections and glob rule files. `skil rules enable <id>` / `skil rules disable <id>` toggles a shared section; glob rules refuse toggling.
-9. `skil usage` prints read counts from Claude session logs.
-10. `skil doctor` prints a findings table (token-ish cost + warn count per command); `skil doctor <name>` drills into one command's findings. No key required; set `SKIL_LLM_PROVIDER` + `SKIL_LLM_API_KEY` (or save a key on the Settings tab) to also get conflict/vague-trigger findings.
-11. `skil suggest` prints editorial picks for a role (`--role`, default `swe`). With the same env vars as doctor, it LLM-reranks against this project's `package.json`. The GUI's Discover has a matching **Suggested** chip.
+## Install
 
-## Commands
+App: [skil.website](https://www.skil.website/)
 
 ```bash
-skil scan                                   # pull: rebuild the catalog from the live pair, parked, and leftovers
-skil create <name> [--skills id-a,id-b]     # make a command (starts off)
-skil delete <name>                          # drop the command from the map (and its live/parked folder)
-skil list                                   # the project map
-skil add <command> <skillId>                # file a skill onto a command
-skil remove <command> <skillId>              # unfile a skill from a command
-skil enable <command>                       # turn a command on: writes it into .agents/skills + .claude/skills
-skil disable <command>                      # turn a command off: parks it under .skil/parked/commands/<name>
-skil install <skillId>                      # install a market skill straight into the live pair
-skil rules                                  # list AGENTS.md shared sections + glob rule files
-skil rules show <id>                        # print a rule body
-skil rules enable <id>                      # turn on a shared-law rule (upserts its AGENTS.md section)
-skil rules disable <id>                     # turn off a shared-law rule (removes the section, parks the body)
-skil usage                                  # print Claude read counts
-skil doctor [name]                          # findings table, or one command's findings — math+regex free, +LLM findings with a BYOK key
-skil suggest [--role swe]                   # editorial picks for a role; LLM-reranks when a BYOK key is set — never installs
-skil search [query] [--trending]            # typed search, or all-time / trending leaderboard
+git clone https://github.com/eric-huychung/skil.git
+cd skil && npm install && npm run build
+npx skil --help
 ```
 
-State lives in `.skil/state.json`. Missing file starts empty. If you still have `.contextkit/state.json` and no `.skil/` file, skil errors — move that file to `.skil/state.json`. Project-local. The CLI uses the current working directory. The GUI connects a folder from the Sync tab — it does not `chdir`.
+Run the CLI from your project folder.
 
-`skil search react` searches the market index (`GET /api/market/search`) — same index the GUI Discover uses. No query lists the live skills.sh all-time leaderboard (top 10). `--trending` lists trending. A typed query ignores `--trending`.
+---
 
-Live browse still goes through skil's backend with a Vercel OIDC token — no `SKILLS_API_KEY`. Default origin is `src/config/website.json` (`https://www.skil.website`). Override with `SKIL_API_URL`, then `CONTEXTKIT_API_URL`.
+## Find
 
-BYOK for doctor's LLM findings is separate and never touches that backend: set `SKIL_LLM_PROVIDER` (`anthropic` | `openai` | `openrouter`) and `SKIL_LLM_API_KEY` and `skil doctor` calls that provider directly.
+```bash
+skil search
+skil search --trending
+skil search react
+skil suggest
+skil install obra/react-patterns
+```
 
-## Desktop GUI
+- `search` — top 10 by installs
+- `search --trending` — what’s hot
+- `search react` — lookup by name
+- `suggest` — picks for this repo (doesn’t install)
+- `install …` — drop that skill into the project. Use the name in the left column from search.
 
-An Electron app (`gui/`) shares the same engine as the CLI. Window and brand say skil. Six tabs:
+---
 
-- **Sync** — pick or change the project folder, re-scan, see skills-by-source, and adopt Leftovers ("Use ours and remove leftovers"). Recent folders let you switch without losing state.
-- **Skills** — the full catalog (Market = added from Discover, Project = already on disk), searchable, 25 per page, On/Off toggle per row. Click a row for a details preview with Delete and (for market skills) Update. Toggling is the write; filing onto a command does not remove a skill from here.
-- **Discover** — market index when shelves have data, otherwise All time / Trending + typed search, plus a **Suggested** chip that only fetches when selected. No folder → connect prompt. Folder bound → editorial picks for the chosen role, with a warning + Settings link when no LLM key is saved. With a key, the same tab LLM-reranks against `package.json`. Add installs straight into the live pair — no staging step.
-- **Commands** — one list, grouped by SDLC stage. Create, file skills from a "From Skills" picker, remove a skill, delete a command, and an On/Off toggle that writes/parks the command's human-only skill in the live pair. No IDE workspace cards, no dock picker.
-- **Rules** — shared `AGENTS.md` sections with an On/Off toggle (parks/restores the section body), plus read-only path-scoped glob rules. Click a rule for a preview.
-- **Settings** — save an LLM key (provider + key, Save also tests it) to turn on doctor's conflict/vague-trigger findings and Suggest's rerank.
+## Organize
 
-Pick a folder and skil scans once. Re-scan is the header icon next to the path. Scan needs a connected folder.
+On = a copy in both `.agents/skills` and `.claude/skills` (the live pair). Off = parked under `.skil/parked`, not deleted. Leftovers (old folders like `.cursor/skills`) — clean those in the app.
 
-Run it with `npm run gui:dev`.
+### Skills
 
-## Troubleshooting
+```bash
+skil scan
+skil skills
+skil skills enable tdd
+skil skills disable tdd
+```
 
-`Command '<name>' already exists`
-That name is already on this project map.
+- `scan` — find `SKILL.md` folders in this repo. Read only.
+- `skills` — what’s in the catalog (on / off)
+- `skills enable` / `disable` — turn one skill on or off. Not `skil enable` — that one’s for commands.
 
-`Command '<name>' not found`
-Run `skil list` to see available commands.
+### Commands
 
-`Can't turn on '<name>': ... already exists and isn't ours to manage`
-A live path already holds a skill that isn't this command's own folder. Rename the command or clear that path first — skil never auto-prefixes.
+A command is a workflow (`build` → `/build`). Adding a skill to it doesn’t turn that skill on.
 
-**Scan reports no skills**
-Scan looks for `SKILL.md` under `.agents/skills`, `.claude/skills`, `.skil/parked/skills`, and any leftover skill folders elsewhere (`.cursor/skills`, `.codex/skills`, `.github/skills`, `.windsurf/skills`, etc). It does not read unstamped `commands/` folders.
+```bash
+skil create build --skills tdd
+skil list
+skil add build design
+skil remove build design
+skil enable build
+skil disable build
+skil delete build
+```
+
+- `create` — make a command (starts off)
+- `list` — what’s on the map
+- `add` / `remove` — put a skill on a command, or take it off
+- `enable` — turn the command on
+- `disable` — park it
+- `delete` — drop the command
+
+### Rules
+
+```bash
+skil rules
+skil rules enable pair-programming/behavior
+skil rules disable pair-programming/behavior
+```
+
+- `rules` — list shared `AGENTS.md` sections and other rule files
+- `enable` — turn a shared section on
+- `disable` — turn it off
+
+skil keeps its map in `.skil/state.json`.
+
+---
+
+## Eval
+
+```bash
+skil doctor
+skil doctor build
+skil usage
+```
+
+- `doctor` — checkup per command
+- `doctor build` — that command’s findings
+- `usage` — how often Claude actually read a skill
+
+---
+
+## App
+
+```bash
+npm run gui:dev
+```
+
+Same project, visual. Discover, Skills, Commands, Rules, Sync, Settings.
+
+## License
+
+MIT

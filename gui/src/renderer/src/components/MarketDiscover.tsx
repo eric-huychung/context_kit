@@ -3,7 +3,7 @@ import { ArrowRight, Check, MagnifyingGlass, Plus } from '@phosphor-icons/react'
 import { useBridge } from '../bridge-context';
 import { FOCUS_RING } from '../lib/focus-ring';
 import { formatInstalls } from '../lib/format-installs';
-import type { BrowseView, MarketSearchRow, ShelfRole } from '../../../shared/ipc';
+import type { BrowseView, LlmStatus, MarketSearchRow, ShelfRole } from '../../../shared/ipc';
 import { StatusNotice, StatusSkeleton, type StatusKind } from '../../../../../shared/status';
 import SkillPreviewDialog from './SkillPreviewDialog';
 import WorkspaceWarning from './WorkspaceWarning';
@@ -73,7 +73,13 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
   const [suggestedActive, setSuggestedActive] = useState(false);
   const [suggestRole, setSuggestRole] = useState<string>(SUGGEST_ROLE_TABS[0].slug);
   const [suggestGate, setSuggestGate] = useState<SuggestGate>({ status: 'idle' });
-  const [hasLlmKey, setHasLlmKey] = useState(true);
+  const [llm, setLlm] = useState<LlmStatus>({
+    hasKey: true,
+    enabled: true,
+    provider: 'anthropic',
+    keys: [],
+    activeId: null,
+  });
   const suggestCheckedFor = useRef<string | null>(null);
 
   useEffect(() => {
@@ -96,7 +102,7 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
   }, [bridge]);
 
   useEffect(() => {
-    void bridge.hasLlmKey().then(setHasLlmKey);
+    void bridge.llmStatus().then(setLlm);
   }, [bridge]);
 
   useEffect(() => {
@@ -157,14 +163,15 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
   }
 
   /**
-   * Editorial picks by default; LLM rerank when a key is saved. Caches by
-   * role + key so tab switches do not refetch until one of those changes.
+   * Editorial picks by default; LLM rerank when a key is on. Caches by
+   * role + on/off so tab switches do not refetch until one of those changes.
    */
   const runSuggestCheck = useCallback(
     async (role: string) => {
-      const key = await bridge.hasLlmKey();
-      setHasLlmKey(key);
-      const cacheKey = `${role}::${key}`;
+      const status = await bridge.llmStatus();
+      setLlm(status);
+      const llmOn = status.hasKey && status.enabled;
+      const cacheKey = `${role}::${llmOn}`;
       if (suggestCheckedFor.current === cacheKey) {
         return;
       }
@@ -306,14 +313,10 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
         <div>
           <p className="eyebrow">Workspace</p>
           <h1>Discover</h1>
-          <p className="workspace-lede">
-            Browse the market index by role, then category. `+` writes a skill into both live trees right away —
-            it shows up under Skills as Market.
-          </p>
         </div>
-        {suggestedActive && !hasLlmKey && (
+        {suggestedActive && !(llm.hasKey && llm.enabled) && (
           <WorkspaceWarning
-            text="Editorial picks only — no LLM key"
+            text={llm.hasKey ? 'Editorial picks only — LLM off' : 'Editorial picks only — no LLM key'}
             actionLabel="Settings"
             actionAriaLabel="Open LLM settings"
             onAction={() => onOpenSettings?.()}
@@ -364,18 +367,19 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
                 {tab.label}
               </button>
             ))}
-            {shelves.map((r) => (
-              <button
-                key={r.slug}
-                type="button"
-                role="tab"
-                aria-selected={!suggestedActive && browseView === null && r.slug === activeRole}
-                onClick={() => handleRoleSelect(r)}
-                className={`filter ${!suggestedActive && browseView === null && r.slug === activeRole ? 'active-filter' : ''} ${FOCUS_RING}`}
-              >
-                {r.label}
-              </button>
-            ))}
+            {!suggestedActive &&
+              shelves.map((r) => (
+                <button
+                  key={r.slug}
+                  type="button"
+                  role="tab"
+                  aria-selected={browseView === null && r.slug === activeRole}
+                  onClick={() => handleRoleSelect(r)}
+                  className={`filter ${browseView === null && r.slug === activeRole ? 'active-filter' : ''} ${FOCUS_RING}`}
+                >
+                  {r.label}
+                </button>
+              ))}
           </div>
 
           {role && browseView === null && !suggestedActive && (
@@ -399,23 +403,19 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
 
       {suggestedActive ? (
         <>
-          <div className="suggest-role-picker">
-            <label className="suggest-role-label" htmlFor="suggest-role">
-              Role
-            </label>
-            <select
-              id="suggest-role"
-              value={suggestRole}
-              onChange={(event) => handleSuggestRoleSelect(event.target.value)}
-              className={`suggest-role-select ${FOCUS_RING}`}
-              aria-label="Suggested role"
-            >
-              {SUGGEST_ROLE_TABS.map((tab) => (
-                <option key={tab.slug} value={tab.slug}>
-                  {tab.label}
-                </option>
-              ))}
-            </select>
+          <div role="tablist" aria-label="Suggested role" className="filter-row">
+            {SUGGEST_ROLE_TABS.map((tab) => (
+              <button
+                key={tab.slug}
+                type="button"
+                role="tab"
+                aria-selected={suggestRole === tab.slug}
+                onClick={() => handleSuggestRoleSelect(tab.slug)}
+                className={`filter ${suggestRole === tab.slug ? 'active-filter' : ''} ${FOCUS_RING}`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
           {suggestGate.status === 'loading' && <StatusSkeleton />}
           {suggestGate.status === 'error' && (

@@ -6,7 +6,8 @@ import { InMemorySkillsAdapter } from '../../../../src/adapters/in-memory-skills
 import { InMemoryUsageCollector } from '../../../../src/adapters/in-memory-usage.js';
 import type { ICollectionEngine } from '../../../../src/interfaces/engine.js';
 import { err, isOk, ok, type Result } from '../../../../src/core/result.js';
-import type { MarketPreviewData, MarketSearchRow, ShelfRole, SkilBridge, ScanResult, SuggestResult } from '../../shared/ipc.js';
+import type { LlmProvider, MarketPreviewData, MarketSearchRow, ShelfRole, SkilBridge, ScanResult, SuggestResult } from '../../shared/ipc.js';
+import { llmKeyHint, toLlmStatus } from '../../shared/llm-settings.js';
 import { forgetFolder, rememberFolder } from '../../shared/recent-folders.js';
 import { ThemeProvider } from './theme';
 import { BridgeProvider } from './bridge-context';
@@ -83,11 +84,6 @@ export type TestBridgeOptions = {
    * Omitted → bind `DEFAULT_TEST_PROJECT_ROOT`. `null` → user canceled.
    */
   nextPick?: string | null;
-  /**
-   * What the next dest-only folder pick returns (install/export without a bind).
-   * Omitted → `/tmp/test-project`. `null` → user canceled.
-   */
-  nextDestination?: string | null;
   /** Recents at start. Bound `projectRoot` is remembered on top if set. */
   recentFolders?: string[];
   /**
@@ -98,7 +94,11 @@ export type TestBridgeOptions = {
   enginesByPath?: Record<string, ICollectionEngine>;
   /** Whether an LLM key is saved at start. Default `false` (Settings' "no key" state). */
   hasLlmKey?: boolean;
-  /** What `pingLlm` returns once a key is saved. Default success. */
+  /** Toggle state when a key is saved. Default `true`. */
+  llmEnabled?: boolean;
+  /** Last-4 hint shown in Settings when a key is already saved. */
+  llmKeyHint?: string;
+  /** What save-key ping returns. Default success. */
   pingResult?: Result<void>;
 };
 
@@ -120,7 +120,31 @@ export function createTestBridge(engine: ICollectionEngine, options: TestBridgeO
   let activeEngine = engine;
   let projectRoot: string | null = options.projectRoot ?? null;
   let recentFolders = options.recentFolders ?? [];
-  let llmKeySaved = options.hasLlmKey ?? false;
+  let llmKeys: Array<{ id: string; provider: LlmProvider; apiKey: string; keyHint?: string }> = [];
+  let llmActiveId: string | null = null;
+  if (options.hasLlmKey) {
+    llmKeys = [
+      {
+        id: 'k1',
+        provider: 'anthropic',
+        apiKey: 'sk-seed',
+        ...(options.llmKeyHint ? { keyHint: options.llmKeyHint } : {}),
+      },
+    ];
+    llmActiveId = options.llmEnabled === false ? null : 'k1';
+  }
+
+  function llmStoreStatus() {
+    return toLlmStatus({
+      keys: llmKeys.map((key) => ({
+        id: key.id,
+        provider: key.provider,
+        encryptedKey: 'x',
+        ...(key.keyHint ? { keyHint: key.keyHint } : {}),
+      })),
+      activeId: llmActiveId,
+    });
+  }
   if (projectRoot) recentFolders = rememberFolder(projectRoot, recentFolders);
   const scanListeners = new Set<(result: ScanResult) => void>();
 
@@ -161,10 +185,6 @@ export function createTestBridge(engine: ICollectionEngine, options: TestBridgeO
       if (options.nextPick === null) return null;
       return bind(options.nextPick ?? DEFAULT_TEST_PROJECT_ROOT);
     },
-    pickDestinationFolder: async () => {
-      if (options.nextDestination === null) return null;
-      return options.nextDestination ?? DEFAULT_TEST_PROJECT_ROOT;
-    },
     bindProjectFolder: async (path: string) => bind(path),
     listRecentFolders: async () => recentFolders,
     removeRecentFolder: async (path: string) => {
@@ -188,7 +208,11 @@ export function createTestBridge(engine: ICollectionEngine, options: TestBridgeO
     emitScan: (result = EMPTY_SCAN) => {
       notifyScan(result);
     },
-    deleteSkill: async (skillId) => activeEngine.deleteSkill(skillId),
+    deleteSkill: async (skillId) => {
+      const result = activeEngine.deleteSkill(skillId);
+      if (result.ok) notifyScan({ ...EMPTY_SCAN, gone: [skillId] });
+      return result;
+    },
     usage: async () => activeEngine.usage(),
     // Market index reads are HTTP, not engine-backed — default to an empty
     // index so Discover stays on live Top / Trending.
@@ -217,12 +241,6 @@ export function createTestBridge(engine: ICollectionEngine, options: TestBridgeO
       if (result.ok) notifyScan(EMPTY_SCAN);
       return result;
     },
-    listLeftovers: async () => activeEngine.leftovers(),
-    adoptLeftovers: async (ids) => {
-      const result = await activeEngine.adoptLeftovers(ids);
-      if (result.ok) notifyScan(EMPTY_SCAN);
-      return result;
-    },
     auditSync: async () => activeEngine.auditSync(),
     previewSync: async (path) => activeEngine.previewSync(path),
     importToCanonical: async (ids) => {
@@ -241,14 +259,31 @@ export function createTestBridge(engine: ICollectionEngine, options: TestBridgeO
       return result;
     },
     health: async () => activeEngine.health(),
-    hasLlmKey: async () => llmKeySaved,
-    saveLlmSettings: async () => {
-      llmKeySaved = true;
+    llmStatus: async () => llmStoreStatus(),
+    saveLlmSettings: async (provider: LlmProvider, apiKey: string) => {
+      if (options.pingResult && !options.pingResult.ok) return options.pingResult;
+      const id = `key-${llmKeys.length + 1}`;
+      const hint = llmKeyHint(apiKey);
+      llmKeys = [...llmKeys, { id, provider, apiKey, ...(hint ? { keyHint: hint } : {}) }];
+      llmActiveId = id;
       return ok(undefined);
     },
-    pingLlm: async () => {
-      if (!llmKeySaved) return err(new Error('No LLM key saved yet.'));
-      return options.pingResult ?? ok(undefined);
+    setActiveLlmKey: async (id: string) => {
+      if (!llmKeys.some((key) => key.id === id)) return err(new Error('No LLM key saved yet.'));
+      llmActiveId = llmActiveId === id ? null : id;
+      return ok(undefined);
+    },
+    revealLlmKey: async (id: string) => {
+      const key = llmKeys.find((row) => row.id === id);
+      if (!key) return err(new Error('No LLM key saved yet.'));
+      return ok(key.apiKey);
+    },
+    removeLlmKey: async (id: string) => {
+      const next = llmKeys.filter((key) => key.id !== id);
+      if (next.length === llmKeys.length) return err(new Error('No LLM key saved yet.'));
+      llmKeys = next;
+      if (llmActiveId === id) llmActiveId = null;
+      return ok(undefined);
     },
     suggest: async (shelves, role): Promise<Result<SuggestResult>> => activeEngine.suggest(shelves, { role }),
   };

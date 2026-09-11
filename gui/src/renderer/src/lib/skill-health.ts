@@ -1,5 +1,6 @@
-import type { Collection, Finding, HealthReport } from '../../../shared/ipc';
-import { estimateTokens, parseDescription } from '../../../../../src/core/health-checks.js';
+import type { Finding, HealthReport } from '../../../shared/ipc';
+/** Browser-safe — do not import `health-checks` (node:crypto whitescreens Electron). */
+import { estimateTokens, parseDescription } from '../../../../../src/core/skill-md.js';
 
 export type SkillFindingView = {
   type: Finding['type'];
@@ -47,17 +48,6 @@ export function findingsForSkill(report: HealthReport, skillId: string): SkillFi
     }
   }
   return items;
-}
-
-export function commandsForSkill(
-  collections: Array<Pick<Collection, 'name' | 'skills'>>,
-  skillId: string
-): string[] {
-  return collections.filter((command) => command.skills.includes(skillId)).map((command) => command.name);
-}
-
-export function flaggedIdsFromHealth(report: HealthReport): Set<string> {
-  return new Set(report.flatMap((row) => row.findings.map((finding) => finding.skillId)));
 }
 
 /** Same char/4 estimate doctor uses. Description is the always-loaded cost. */

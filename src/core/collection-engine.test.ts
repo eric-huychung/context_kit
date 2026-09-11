@@ -893,9 +893,8 @@ describe('CollectionEngine', () => {
     });
   });
 
-  describe('loading installed skills on startup', () => {
-    it('does not treat leftover getInstalled() as the catalog; install records the live pair', async () => {
-      skills.seedInstalled([{ id: 'obra/react-patterns', source: 'skills.sh', installedAt: '2024-01-01T00:00:00.000Z' }]);
+  describe('install records the live pair', () => {
+    it('starts with an empty catalog; install writes both live paths', async () => {
       const loadedEngine = new CollectionEngine(fs, skills);
 
       expect(loadedEngine.skills()).toEqual([]);
@@ -966,7 +965,6 @@ describe('CollectionEngine', () => {
         })
       );
       expect(record?.hash).toBeTruthy();
-      expect(skills.getInstalled()).toEqual([]);
     });
 
     it('uses a nested path relative to the skills root as the catalog id', () => {
@@ -1122,7 +1120,6 @@ describe('CollectionEngine', () => {
       expect(result).toEqual({ ok: true, value: { added: [], gone: [], changed: [], alwaysOnWarnings: [] } });
       expect(engine.skills()).toEqual([]);
       expect(engine.list()).toEqual([]);
-      expect(skills.getInstalled()).toEqual([]);
     });
 
     it('reports a hash change without dropping the catalog row', () => {
@@ -1732,6 +1729,106 @@ describe('CollectionEngine', () => {
         if (isOk(result)) {
           expect(result.value.find((row) => row.name === 'empty')?.usedLlm).toBe(false);
         }
+      });
+
+      it('makes one LLM call for every command with filed skills, not one per command', async () => {
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+        fs.writeFile('.cursor/skills/review/SKILL.md', '# review\n');
+        engine.scan();
+        engine.create('build', ['tdd']);
+        engine.create('review', ['review']);
+        const complete = vi.fn(async () => ok(JSON.stringify({ conflicts: [], vague: [] })));
+        const withLlm = new CollectionEngine(fs, skills, undefined, undefined, { complete });
+
+        const result = await withLlm.health();
+
+        expect(complete).toHaveBeenCalledTimes(1);
+        expect(isOk(result)).toBe(true);
+        if (isOk(result)) {
+          expect(result.value.find((row) => row.name === 'build')?.usedLlm).toBe(true);
+          expect(result.value.find((row) => row.name === 'review')?.usedLlm).toBe(true);
+        }
+      });
+
+      it('reuses the LLM result on a second health() with unchanged skills (Skills/Commands/Rules share this)', async () => {
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+        engine.scan();
+        engine.create('build', ['tdd']);
+        const complete = vi.fn(async () => ok(JSON.stringify({ conflicts: [], vague: [] })));
+        const withLlm = new CollectionEngine(fs, skills, undefined, undefined, { complete });
+
+        await withLlm.health();
+        const second = await withLlm.health();
+
+        expect(complete).toHaveBeenCalledTimes(1);
+        expect(isOk(second) && second.value.find((row) => row.name === 'build')?.usedLlm).toBe(true);
+      });
+
+      it('coalesces overlapping health() calls into one LLM POST', async () => {
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+        engine.scan();
+        engine.create('build', ['tdd']);
+        let releases!: (value: ReturnType<typeof ok<string>>) => void;
+        const complete = vi.fn(
+          () =>
+            new Promise<ReturnType<typeof ok<string>>>((resolve) => {
+              releases = resolve;
+            })
+        );
+        const withLlm = new CollectionEngine(fs, skills, undefined, undefined, { complete });
+
+        const first = withLlm.health();
+        const second = withLlm.health();
+        await vi.waitFor(() => {
+          expect(typeof releases).toBe('function');
+        });
+        releases(ok(JSON.stringify({ conflicts: [], vague: [] })));
+        await Promise.all([first, second]);
+
+        expect(complete).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not re-call the LLM on a 401 until a new engine is built (key save rebinds)', async () => {
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
+        engine.scan();
+        engine.create('build', ['tdd']);
+        const complete = vi.fn(async () => err(new Error('LlmChat: openai rejected the API key (401).')));
+        const withLlm = new CollectionEngine(fs, skills, undefined, undefined, { complete });
+
+        await withLlm.health();
+        await withLlm.health();
+
+        expect(complete).toHaveBeenCalledTimes(1);
+      });
+
+      it('calls the LLM again after a filed skill description changes', async () => {
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '---\ndescription: Use for tdd.\n---\n# tdd\n');
+        engine.scan();
+        engine.create('build', ['tdd']);
+        const complete = vi.fn(async () => ok(JSON.stringify({ conflicts: [], vague: [] })));
+        const withLlm = new CollectionEngine(fs, skills, undefined, undefined, { complete });
+
+        await withLlm.health();
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '---\ndescription: Use for tests.\n---\n# tdd rewritten\n');
+        withLlm.scan();
+        await withLlm.health();
+
+        expect(complete).toHaveBeenCalledTimes(2);
+      });
+
+      it('does not re-call the LLM when only the skill body changes', async () => {
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '---\ndescription: Use for tdd.\n---\n# tdd\n');
+        engine.scan();
+        engine.create('build', ['tdd']);
+        const complete = vi.fn(async () => ok(JSON.stringify({ conflicts: [], vague: [] })));
+        const withLlm = new CollectionEngine(fs, skills, undefined, undefined, { complete });
+
+        await withLlm.health();
+        fs.writeFile('.cursor/skills/tdd/SKILL.md', '---\ndescription: Use for tdd.\n---\n# tdd rewritten\n');
+        withLlm.scan();
+        await withLlm.health();
+
+        expect(complete).toHaveBeenCalledTimes(1);
       });
 
       it('degrades silently on a failed LLM call: usedLlm stays false and math+regex findings still populate', async () => {

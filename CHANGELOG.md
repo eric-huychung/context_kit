@@ -4,6 +4,26 @@ All notable changes to skil are documented here. Versions follow [Semantic Versi
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-10
+
+Settings key vault and cheaper, cached doctor LLM. Main stays deployable.
+
+### Added
+- Settings can save more than one BYOK key, switch which one is active, reveal, and remove. Old single-key files migrate in place.
+- Doctor LLM findings are cached on the engine (content hash + single-flight + failure cooldown) so Skills, Commands, and Rules share one call.
+
+### Changed
+- BYOK cheap models: Anthropic `claude-haiku-4-5`, OpenAI / OpenRouter `gpt-4.1-nano` (retired Haiku 3.5 snapshot and gpt-4o-mini).
+- Doctor's LLM pass sends skill id + description only; bodies stay on-machine for math checks.
+- `skil list` no longer prints a Command column.
+- README is the short user loop (find / organize / eval), not the architecture dump.
+
+### Fixed
+- BYOK requests time out after 15s and 429s fail closed without retrying, so a dead or rate-limited key cannot hammer the provider on every tab/scan.
+
+### Security
+- Reveal is an explicit user action. Raw keys still never sit in the renderer status payload.
+
 ## [0.5.0] - 2026-09-10
 
 Doctor, Suggest, and BYOK ship. Main stays deployable.

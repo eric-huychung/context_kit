@@ -1,7 +1,10 @@
-import { load as loadYaml } from 'js-yaml';
+import { createHash } from 'node:crypto';
 import type { Finding } from '../types/index.js';
 import type { LlmChat } from '../llm/llm-chat.js';
 import { isOk, ok, type Result } from './result.js';
+import { estimateTokens, parseDescription } from './skill-md.js';
+
+export { estimateTokens, parseDescription } from './skill-md.js';
 
 /** Description length past this is "always loaded, rarely worth it" (idle-cost). 500 = Skillsaw error; spec max is 1024. */
 const IDLE_COST_CHAR_THRESHOLD = 500;
@@ -19,31 +22,6 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bghp_[A-Za-z0-9]{36}\b/, // GitHub personal access token
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/, // Slack token
 ];
-
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
-
-/** Rough char/4 token estimate — a relative warn signal, not a billing number. */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
-/** Pulls the YAML `description:` field out of SKILL.md frontmatter. Malformed/missing frontmatter is `''`, not a crash. */
-export function parseDescription(contents: string): string {
-  const match = contents.match(FRONTMATTER_RE);
-  if (!match?.[1]) {
-    return '';
-  }
-  try {
-    const parsed = loadYaml(match[1]);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const description = (parsed as { description?: unknown }).description;
-      return typeof description === 'string' ? description : '';
-    }
-  } catch {
-    // malformed frontmatter — no description found, not a crash
-  }
-  return '';
-}
 
 function idleCostFinding(skillId: string, description: string): Finding | null {
   if (description.length <= IDLE_COST_CHAR_THRESHOLD) {
@@ -137,23 +115,35 @@ export function computeSkillFindings(opts: {
   return findings.filter((finding): finding is Finding => finding !== null);
 }
 
-/** One filed skill's text, trimmed for the LLM prompt. */
+/** One filed skill's trigger text for the LLM prompt. Body stays local (fat-body / secret). */
 export interface LlmFindingsSkillInput {
   skillId: string;
   description: string;
-  body: string;
 }
 
-/** Body excerpt cap per skill in the LLM prompt — enough context, bounded tokens. */
-const BODY_EXCERPT_CHARS = 500;
-const LLM_FINDINGS_MAX_TOKENS = 600;
+/** One command's filed skills, grouped so the LLM can keep conflicts intra-command. */
+export interface LlmFindingsCommandInput {
+  name: string;
+  skills: LlmFindingsSkillInput[];
+}
+
+const LLM_FINDINGS_MAX_TOKENS_BASE = 400;
+const LLM_FINDINGS_MAX_TOKENS_PER_COMMAND = 200;
+const LLM_FINDINGS_MAX_TOKENS_CAP = 1200;
+
+function llmFindingsMaxTokens(commandCount: number): number {
+  return Math.min(
+    LLM_FINDINGS_MAX_TOKENS_BASE + LLM_FINDINGS_MAX_TOKENS_PER_COMMAND * commandCount,
+    LLM_FINDINGS_MAX_TOKENS_CAP
+  );
+}
 
 function llmFindingsSystemPrompt(): string {
   return [
-    'You audit AI skills filed together on one command, looking for two real failure modes only:',
-    '1) "conflict": two skills whose descriptions/triggers overlap enough that an agent could invoke the wrong one, or that give contradictory instructions.',
+    'You audit AI skills filed on each command, looking for two real failure modes only:',
+    '1) "conflict": two skills on the SAME command whose descriptions/triggers overlap enough that an agent could invoke the wrong one, or that give contradictory instructions. Never flag conflicts across different commands.',
     '2) "vague-trigger": a description too generic to reliably fire when it should (e.g. "helps with code" instead of naming a concrete task or trigger phrase).',
-    'Most skill sets have none of either — only flag real problems, never shared generic words like "help", "code", or "review" alone.',
+    'Most commands have none of either — only flag real problems, never shared generic words like "help", "code", or "review" alone.',
     'Reply with strict JSON and nothing else: {"conflicts":[{"a":"<id>","b":"<id>","why":"<one line>"}],"vague":[{"id":"<id>","why":"<one line>"}]}.',
     'Empty arrays are the expected, common answer.',
   ].join(' ');
@@ -169,12 +159,22 @@ function redactSecrets(text: string): string {
   return out;
 }
 
-function toPromptSkill(skill: LlmFindingsSkillInput): { id: string; description: string; bodyExcerpt: string } {
+function toPromptSkill(skill: LlmFindingsSkillInput): { id: string; description: string } {
   return {
     id: skill.skillId,
     description: redactSecrets(skill.description),
-    bodyExcerpt: redactSecrets(skill.body).slice(0, BODY_EXCERPT_CHARS),
   };
+}
+
+/** Content hash of the exact doctor prompt payload — cache key shared across Skills/Commands/Rules. */
+export function llmFindingsCacheKey(commands: LlmFindingsCommandInput[]): string {
+  const payload = commands
+    .filter((command) => command.skills.length > 0)
+    .map((command) => ({
+      command: command.name,
+      skills: command.skills.map(toPromptSkill),
+    }));
+  return createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex');
 }
 
 function parseLlmFindings(content: string, knownIds: ReadonlySet<string>): Finding[] {
@@ -220,25 +220,40 @@ function parseLlmFindings(content: string, knownIds: ReadonlySet<string>): Findi
 }
 
 /**
- * LLM slice on `health()`: one call over a command's filed skills →
- * conflict pairs + vague triggers. Only called when an `LlmChat` is
- * injected. A network/parse failure returns an `Err` so the caller can
- * leave `usedLlm: false` and keep the report Phase-1-shaped — a bad key
- * degrades silently here; `pingLlm` is where it surfaces clearly.
- * Secret-shaped strings are redacted from the prompt before the call.
+ * LLM slice on `health()`: one call over every command that has filed
+ * skills → conflict pairs + vague triggers, fanned back per command.
+ * Prompt is id + description only (bodies stay on-machine for math
+ * checks). Only called when an `LlmChat` is injected. A network/parse
+ * failure returns an `Err` so the caller can leave `usedLlm: false`
+ * and keep the report Phase-1-shaped — a bad key degrades silently
+ * here; save-time ping is where it surfaces clearly. Secret-shaped strings
+ * are redacted from the prompt before the call.
  */
-export async function computeLlmFindings(skills: LlmFindingsSkillInput[], llmChat: LlmChat): Promise<Result<Finding[]>> {
-  if (skills.length === 0) {
-    return ok([]);
+export async function computeLlmFindings(
+  commands: LlmFindingsCommandInput[],
+  llmChat: LlmChat
+): Promise<Result<Record<string, Finding[]>>> {
+  const nonempty = commands.filter((command) => command.skills.length > 0);
+  if (nonempty.length === 0) {
+    return ok({});
   }
-  const knownIds = new Set(skills.map((skill) => skill.skillId));
   const result = await llmChat.complete({
     system: llmFindingsSystemPrompt(),
-    user: JSON.stringify(skills.map(toPromptSkill)),
-    maxTokens: LLM_FINDINGS_MAX_TOKENS,
+    user: JSON.stringify(
+      nonempty.map((command) => ({
+        command: command.name,
+        skills: command.skills.map(toPromptSkill),
+      }))
+    ),
+    maxTokens: llmFindingsMaxTokens(nonempty.length),
   });
   if (!isOk(result)) {
     return result;
   }
-  return ok(parseLlmFindings(result.value, knownIds));
+  const byCommand: Record<string, Finding[]> = {};
+  for (const command of nonempty) {
+    const knownIds = new Set(command.skills.map((skill) => skill.skillId));
+    byCommand[command.name] = parseLlmFindings(result.value, knownIds);
+  }
+  return ok(byCommand);
 }

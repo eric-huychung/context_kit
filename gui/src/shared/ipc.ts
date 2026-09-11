@@ -1,9 +1,10 @@
 import type { Result } from '../../../src/core/result.js';
-import type { AdoptResult, BrowseView, Collection, CommandHealth, DriftAction, Finding, HealthReport, IDE, LeftoverRecord, OriginCheck, OriginStatus, RuleRecord, ScanResult, Skill, SkillRecord, SuggestResult, SyncAudit, SyncPreview, SyncRow, UsageRow } from '../../../src/types/index.js';
+import type { AdoptResult, BrowseView, Collection, CommandHealth, DriftAction, Finding, HealthReport, IDE, OriginCheck, OriginStatus, RuleRecord, ScanResult, Skill, SkillRecord, SuggestResult, SyncAudit, SyncPreview, SyncRow, UsageRow } from '../../../src/types/index.js';
 import type { MarketSearchRow, ShelfRole } from '../../../src/backend/market-types.js';
 import type { LlmProvider } from '../../../src/llm/llm-chat.js';
+import type { LlmStatus, LlmKeyRow } from './llm-settings.js';
 
-export type { AdoptResult, BrowseView, Collection, CommandHealth, DriftAction, Finding, HealthReport, IDE, LeftoverRecord, LlmProvider, MarketSearchRow, OriginCheck, OriginStatus, Result, RuleRecord, ScanResult, ShelfRole, Skill, SkillRecord, SuggestResult, SyncAudit, SyncPreview, SyncRow, UsageRow };
+export type { AdoptResult, BrowseView, Collection, CommandHealth, DriftAction, Finding, HealthReport, IDE, LlmKeyRow, LlmProvider, LlmStatus, MarketSearchRow, OriginCheck, OriginStatus, Result, RuleRecord, ScanResult, ShelfRole, Skill, SkillRecord, SuggestResult, SyncAudit, SyncPreview, SyncRow, UsageRow };
 
 /**
  * Client-side shape of `GET /api/market/preview`'s `data` — not exported by
@@ -38,7 +39,6 @@ export const IPC_CHANNELS = {
   addSkill: 'skil:add-skill',
   deleteCollection: 'skil:delete-collection',
   pickProjectFolder: 'skil:pick-project-folder',
-  pickDestinationFolder: 'skil:pick-destination-folder',
   bindProjectFolder: 'skil:bind-project-folder',
   getProjectRoot: 'skil:get-project-root',
   listRecentFolders: 'skil:list-recent-folders',
@@ -57,17 +57,17 @@ export const IPC_CHANNELS = {
   listRules: 'skil:list-rules',
   readRule: 'skil:read-rule',
   setSharedRuleEnabled: 'skil:set-shared-rule-enabled',
-  listLeftovers: 'skil:list-leftovers',
-  adoptLeftovers: 'skil:adopt-leftovers',
   auditSync: 'skil:audit-sync',
   previewSync: 'skil:preview-sync',
   importToCanonical: 'skil:import-to-canonical',
   removeLeftovers: 'skil:remove-leftovers',
   resolveDrift: 'skil:resolve-drift',
   health: 'skil:health',
-  hasLlmKey: 'skil:has-llm-key',
+  llmStatus: 'skil:llm-status',
   saveLlmSettings: 'skil:save-llm-settings',
-  pingLlm: 'skil:ping-llm',
+  setActiveLlmKey: 'skil:set-active-llm-key',
+  revealLlmKey: 'skil:reveal-llm-key',
+  removeLlmKey: 'skil:remove-llm-key',
   suggest: 'skil:suggest',
 } as const;
 
@@ -100,8 +100,6 @@ export interface SkilBridge {
   deleteCollection(name: string): Promise<Result<void>>;
   /** Opens a directory dialog and binds the session. Returns the picked path, or `null` if canceled. */
   pickProjectFolder(): Promise<string | null>;
-  /** Opens a directory dialog for install/export dest. Does not bind the session. */
-  pickDestinationFolder(): Promise<string | null>;
   /** Bind an already-picked folder as the session project. Rebuilds the engine against that path. */
   bindProjectFolder(path: string): Promise<string | null>;
   /** Currently bound project folder, or `null` if none is bound. Last folder is restored on launch. */
@@ -119,7 +117,7 @@ export interface SkilBridge {
   onScan(listener: (result: ScanResult) => void): () => void;
   /** Deletes a project skill from disk (all IDE copies). Nested skill folders stay. */
   deleteSkill(skillId: string): Promise<Result<void>>;
-  /** Claude-first read counts for catalog skills. Failure is an error Result; UI must not block export. */
+  /** Claude-first read counts for catalog skills. Failure is an error Result. */
   usage(): Promise<Result<UsageRow[]>>;
   /** Market index (Discover backend): role -> category -> top skills. Empty `data: []` if the index has no sync yet. */
   marketShelves(): Promise<Result<ShelfRole[]>>;
@@ -149,10 +147,6 @@ export interface SkilBridge {
    * body under `.skil/parked/rules/<id>`. Refuses a `glob` rule id.
    */
   setSharedRuleEnabled(id: string, enabled: boolean): Promise<Result<RuleRecord>>;
-  /** Skill/command/rule paths that are neither live nor parked (and never deprecated). */
-  listLeftovers(): Promise<Result<LeftoverRecord[]>>;
-  /** "Use ours and remove leftovers": copies missing ids into the live pair, then moves old paths to `.skil/deprecated/`. */
-  adoptLeftovers(ids?: string[]): Promise<Result<AdoptResult>>;
   /** Classify leftover paths into needs-import / ready-to-remove / drift. */
   auditSync(): Promise<Result<SyncAudit>>;
   /** Leftover vs live bodies for a conflict path. */
@@ -168,16 +162,19 @@ export interface SkilBridge {
    * saved (`usedLlm: true` on that row).
    */
   health(): Promise<Result<HealthReport>>;
-  /** Whether a usable BYOK key is currently saved. Never returns the key itself. */
-  hasLlmKey(): Promise<boolean>;
+  /** Saved keys (hints only) + which one is active. Never returns a raw key. */
+  llmStatus(): Promise<LlmStatus>;
   /**
-   * Encrypts and saves provider + key (Electron `safeStorage`), then
-   * rebinds the current session's engine so `health()` picks it up
-   * immediately. The renderer never sees the key again after this call.
+   * Pings, then appends a key and makes it the active one. Rebinds the
+   * engine. The renderer never sees the key after this call.
    */
   saveLlmSettings(provider: LlmProvider, apiKey: string): Promise<Result<void>>;
-  /** 1-token call against the currently saved key. No saved key is an error. */
-  pingLlm(): Promise<Result<void>>;
+  /** Makes this the only active key. Calling again on the active key clears it. */
+  setActiveLlmKey(id: string): Promise<Result<void>>;
+  /** Decrypts a saved key for on-screen reveal. Only called when the user shows it. */
+  revealLlmKey(id: string): Promise<Result<string>>;
+  /** Deletes a saved key. If it was active, LLM turns off. */
+  removeLlmKey(id: string): Promise<Result<void>>;
   /**
    * Editorial shortlist for `role` (default `swe`), or LLM-reranked shelf
    * candidates when a key is saved. `shelves` comes from `marketShelves()`.

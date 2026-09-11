@@ -7,10 +7,6 @@ import type { BrowseView, Skill, UsageEvent } from '../types/index.js';
  * This is the primary test seam for isolating CollectionEngine from the
  * real file system. Tests use InMemoryFileSystemAdapter; only
  * RealFileSystemAdapter touches disk.
- *
- * Previously also owned symlink creation/removal and IDE detection for
- * activate/deactivate; those methods were removed along with that feature
- * — see `docs/design/architecture.md`, "Decision Log".
  */
 export interface IFileSystemAdapter {
   /**
@@ -96,9 +92,6 @@ export interface ISkillsAdapter {
    * `cwd` overrides the adapter's project root for this call only.
    */
   install(skillId: string, opts?: { cwd?: string }): Promise<Result<void>>;
-
-  /** Returns skills already installed, read from local tooling state. */
-  getInstalled(): Skill[];
 
   /**
    * Live sha256 of the market SKILL.md for `id`, or `null` if there is

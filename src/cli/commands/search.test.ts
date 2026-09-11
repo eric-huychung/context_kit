@@ -37,7 +37,6 @@ describe('runSearch', () => {
       search: async () => ok([]),
       browse: async () => ok([]),
       install: async () => ok(undefined),
-      getInstalled: () => [],
       skillHash: async () => ok(null),
     });
 
@@ -96,7 +95,6 @@ describe('runSearch', () => {
       search: async () => ok([]),
       browse: async () => ok(elevenBrowseHits()),
       install: async () => ok(undefined),
-      getInstalled: () => [],
       skillHash: async () => ok(null),
     });
 
@@ -112,7 +110,6 @@ describe('runSearch', () => {
       search: async () => ok([]),
       browse: async () => ok([]),
       install: async () => ok(undefined),
-      getInstalled: () => [],
       skillHash: async () => ok(null),
     });
 

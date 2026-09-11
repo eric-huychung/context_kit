@@ -181,13 +181,6 @@ describe('InMemorySkillsAdapter', () => {
     }
   });
 
-  it('install() records the skill as installed', async () => {
-    await skills.install('obra/react-patterns');
-
-    const installed = skills.getInstalled();
-    expect(installed.some((s) => s.id === 'obra/react-patterns')).toBe(true);
-  });
-
   it('install() records each skillId, with no dock argument', async () => {
     await skills.install('obra/x');
     await skills.install('obra/y', { cwd: '/tmp/other' });
@@ -198,16 +191,11 @@ describe('InMemorySkillsAdapter', () => {
     ]);
   });
 
-  it('getInstalled() starts empty', () => {
-    expect(skills.getInstalled()).toEqual([]);
-  });
-
-  it('reset() clears installed skills', async () => {
+  it('reset() clears recorded installs', async () => {
     await skills.install('obra/react-patterns');
 
     skills.reset();
 
-    expect(skills.getInstalled()).toEqual([]);
     expect(skills.getInstalls()).toEqual([]);
   });
 });

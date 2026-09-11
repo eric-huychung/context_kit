@@ -34,7 +34,7 @@ import {
   removeRuleSection,
   upsertRuleSection,
 } from './project-rules.js';
-import { computeLlmFindings, computeSkillFindings, estimateTokens, parseDescription } from './health-checks.js';
+import { computeLlmFindings, computeSkillFindings, estimateTokens, llmFindingsCacheKey, parseDescription } from './health-checks.js';
 import type { LlmFindingsSkillInput } from './health-checks.js';
 import { buildSyncAudit, readSyncBodies } from './workspace-sync.js';
 import {
@@ -47,6 +47,7 @@ import {
   SUGGEST_MAX,
 } from './suggest.js';
 import type { LlmChat } from '../llm/llm-chat.js';
+import { LlmCallCache } from '../llm/llm-call-cache.js';
 import {
   COMMAND_DIR_BY_IDE,
   COMMAND_EXTENSION_BY_IDE,
@@ -192,6 +193,8 @@ const NOOP_USAGE: IUsageCollector = {
 export class CollectionEngine implements ICollectionEngine {
   private state: State;
   private writtenPaths: string[] = [];
+  /** Shared by every health() caller (CLI + Skills/Commands/Rules tabs) for this engine lifetime. */
+  private readonly llmCallCache = new LlmCallCache();
 
   constructor(
     private readonly fs: IFileSystemAdapter,
@@ -201,7 +204,6 @@ export class CollectionEngine implements ICollectionEngine {
     private readonly llmChat?: LlmChat
   ) {
     this.state = loadState(this.fs);
-    this.mergeExternallyInstalledSkills();
   }
 
   lastWrittenPaths(): string[] {
@@ -264,47 +266,86 @@ export class CollectionEngine implements ICollectionEngine {
     const projectHasUsage = [...usageCounts.values()].some((count) => count > 0);
     const now = new Date().toISOString();
 
-    const report: CommandHealth[] = [];
+    const drafts: Array<{
+      name: string;
+      tokenEstimate: number;
+      findings: CommandHealth['findings'];
+      llmInputs: LlmFindingsSkillInput[];
+    }> = [];
+
+    const skillCache = new Map<string, { body: string; description: string; diskHashes: Set<string> }>();
+    const skillSnapshot = (skillId: string) => {
+      const hit = skillCache.get(skillId);
+      if (hit) return hit;
+      const record = this.state.skills.find((skill) => skill.id === skillId);
+      const bodyResult = this.readSkillMd(skillId);
+      const body = isOk(bodyResult) ? bodyResult.value : '';
+      const snapshot = {
+        body,
+        description: parseDescription(body),
+        diskHashes: record ? this.hashesForPaths(record.paths) : new Set<string>(),
+      };
+      skillCache.set(skillId, snapshot);
+      return snapshot;
+    };
+
     for (const command of this.state.commands) {
-      const findings = [];
+      const findings: CommandHealth['findings'] = [];
       let tokenEstimate = 0;
       const llmInputs: LlmFindingsSkillInput[] = [];
 
       for (const skillId of command.skills) {
         const record = this.state.skills.find((skill) => skill.id === skillId);
-        const bodyResult = this.readSkillMd(skillId);
-        const body = isOk(bodyResult) ? bodyResult.value : '';
-        const description = parseDescription(body);
-        tokenEstimate += estimateTokens(description || skillId);
+        const snapshot = skillSnapshot(skillId);
+        tokenEstimate += estimateTokens(snapshot.description || skillId);
 
         findings.push(
           ...computeSkillFindings({
             skillId,
-            description,
-            body,
+            description: snapshot.description,
+            body: snapshot.body,
             usageCount: usageCounts.get(skillId) ?? 0,
-            diskHashes: record ? this.hashesForPaths(record.paths) : new Set<string>(),
+            diskHashes: snapshot.diskHashes,
             projectHasUsage,
             observedAt: unusedObservedAt(record, command.createdAt),
             now,
           })
         );
-        llmInputs.push({ skillId, description, body });
+        llmInputs.push({ skillId, description: snapshot.description });
       }
 
-      let usedLlm = false;
-      if (this.llmChat && llmInputs.length > 0) {
-        const llmResult = await computeLlmFindings(llmInputs, this.llmChat);
-        if (isOk(llmResult)) {
-          findings.push(...llmResult.value);
-          usedLlm = true;
-        }
-      }
-
-      report.push({ name: command.name, tokenEstimate, warnCount: findings.length, findings, usedLlm });
+      drafts.push({ name: command.name, tokenEstimate, findings, llmInputs });
     }
 
-    return ok(report);
+    let llmByCommand: Record<string, CommandHealth['findings']> | undefined;
+    const chat = this.llmChat;
+    if (chat) {
+      const groups = drafts
+        .filter((draft) => draft.llmInputs.length > 0)
+        .map((draft) => ({ name: draft.name, skills: draft.llmInputs }));
+      if (groups.length > 0) {
+        const llmResult = await this.llmCallCache.run(llmFindingsCacheKey(groups), () =>
+          computeLlmFindings(groups, chat)
+        );
+        if (isOk(llmResult)) {
+          llmByCommand = llmResult.value;
+        }
+      }
+    }
+
+    return ok(
+      drafts.map((draft) => {
+        const llmFindings = llmByCommand?.[draft.name] ?? [];
+        const findings = [...draft.findings, ...llmFindings];
+        return {
+          name: draft.name,
+          tokenEstimate: draft.tokenEstimate,
+          warnCount: findings.length,
+          findings,
+          usedLlm: llmByCommand != null && draft.llmInputs.length > 0,
+        };
+      })
+    );
   }
 
   async suggest(shelves: ShelfRole[], options?: { role?: string }): Promise<Result<SuggestResult>> {
@@ -1702,21 +1743,6 @@ export class CollectionEngine implements ICollectionEngine {
   private persist(): Result<void> {
     this.state.version = STATE_VERSION;
     return this.fs.writeJSON(STATE_PATH, this.state);
-  }
-
-  /**
-   * Picks up skills already installed by external tooling (e.g. a bare
-   * `npx skills add` run outside skil) so state stays in sync.
-   * In-memory only: persisted on the next mutation, not on construction.
-   */
-  private mergeExternallyInstalledSkills(): void {
-    const known = new Set(this.state.installedSkills.map((s) => s.id));
-    for (const skill of this.skillsAdapter.getInstalled()) {
-      if (!known.has(skill.id)) {
-        this.state.installedSkills.push(skill);
-        known.add(skill.id);
-      }
-    }
   }
 }
 

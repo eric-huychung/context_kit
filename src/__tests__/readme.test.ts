@@ -23,9 +23,10 @@ describe('README product loop', () => {
     expect(readme).toContain('skil rules');
     expect(readme).toContain('skil usage');
     expect(readme).toContain('skil search');
+    expect(readme).toContain('skil skills');
+    expect(readme).toContain('skil skills enable');
+    expect(readme).toContain('skil skills disable');
     expect(readme).toContain('.skil/state.json');
-    expect(readme).toContain('SKIL_API_URL');
-    expect(readme).toContain('contextkit');
   });
 
   it('describes live pair / parked / leftover — not Inbox or a dock picker', () => {

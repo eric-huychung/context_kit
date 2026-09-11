@@ -1,5 +1,4 @@
--- Market index (Discover backend). See docs/design/architecture.md
--- "Market Index sync (Discover backend)" and tasks/plan.md "Data".
+-- Market index (Discover backend). See docs/design/market-index.md.
 --
 -- Four tables: market_roles, market_fields (categories), market_skills
 -- (thin listing + capped description, no file bodies), market_field_skills
