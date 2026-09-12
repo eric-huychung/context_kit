@@ -1,6 +1,6 @@
 {
   "name": "skil-gui",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Desktop GUI for skil, sharing CollectionEngine with the CLI",
   "private": true,
   "type": "module",
@@ -12,7 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "start": "electron-vite preview",
-    "dist": "npm run build && electron-builder --mac --config electron-builder.yml"
+    "dist": "npm run build && electron-builder --mac --config electron-builder.yml --publish never"
   },
   "dependencies": {
     "@fontsource/fredoka": "^5.3.0",
@@ -23,7 +23,6 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^5.2.0",
-    "electron": "^43.4.1",
     "electron-vite": "^5.0.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -37,6 +36,7 @@
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.5",
+    "electron": "^43.4.1",
     "electron-builder": "^26.15.3",
     "jsdom": "^26.1.0",
     "vitest": "^2.1.8"
