@@ -39,8 +39,8 @@ body:
     id: version
     attributes:
       label: Version
-      description: Tag (0.7.0), git SHA, or "from source".
-      placeholder: 0.7.0
+      description: Tag (0.7.1), git SHA, or "from source".
+      placeholder: 0.7.1
     validations:
       required: true
   - type: input

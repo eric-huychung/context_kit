@@ -4,6 +4,11 @@ All notable changes to skil are documented here. Versions follow [Semantic Versi
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-11
+
+### Fixed
+- Unsigned `.dmg` packaging: `electron` lives in GUI `devDependencies`, and the tag job passes `--publish never` so electron-builder does not try to publish on its own.
+
 ## [0.7.0] - 2026-09-11
 
 CLI skills, unsigned macOS dmgs, and the open-source repo loop. Main stays deployable.
