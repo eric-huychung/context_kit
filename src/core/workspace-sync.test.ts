@@ -9,11 +9,11 @@ import { upsertRuleSection } from './project-rules.js';
 import { buildSyncAudit, readSyncBodies } from './workspace-sync.js';
 
 const TDD_FIXTURE = readFileSync(
-  join(process.cwd(), 'TESTING FOLDER 2/.agents/skills/philosophy/tdd/SKILL.md'),
+  join(process.cwd(), '.agents/skills/philosophy/tdd/SKILL.md'),
   'utf8'
 );
 const INCREMENT_FIXTURE = readFileSync(
-  join(process.cwd(), 'TESTING FOLDER 2/.agents/skills/build/increment/SKILL.md'),
+  join(process.cwd(), '.agents/skills/build/increment/SKILL.md'),
   'utf8'
 );
 
@@ -88,7 +88,7 @@ describe('buildSyncAudit', () => {
     expect(audit.rows).toEqual([]);
   });
 
-  it('uses TESTING FOLDER 2 copies: matching nested leftover is ready-to-remove, an edit is drift', () => {
+  it('uses nested live-pair copies: matching leftover is ready-to-remove, an edit is drift', () => {
     const fs = new InMemoryFileSystemAdapter();
     fs.writeFile('.agents/skills/philosophy/tdd/SKILL.md', TDD_FIXTURE);
     fs.writeFile('.claude/skills/philosophy/tdd/SKILL.md', TDD_FIXTURE);
