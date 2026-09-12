@@ -4,6 +4,11 @@ All notable changes to skil are documented here. Versions follow [Semantic Versi
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-11
+
+### Fixed
+- Pin Electron 43.4.1 and set `electronVersion` so the tag job can package inside the npm workspace.
+
 ## [0.7.1] - 2026-09-11
 
 ### Fixed

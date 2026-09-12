@@ -1,6 +1,6 @@
 {
   "name": "skil",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "private": true,
   "description": "CLI and desktop GUI for mapping AI skills onto SDLC commands",
   "type": "module",
