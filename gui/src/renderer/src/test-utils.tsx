@@ -6,7 +6,7 @@ import { InMemorySkillsAdapter } from '../../../../src/adapters/in-memory-skills
 import { InMemoryUsageCollector } from '../../../../src/adapters/in-memory-usage.js';
 import type { ICollectionEngine } from '../../../../src/interfaces/engine.js';
 import { err, isOk, ok, type Result } from '../../../../src/core/result.js';
-import type { LlmProvider, MarketPreviewData, MarketSearchRow, ShelfRole, SkilBridge, ScanResult, SuggestResult } from '../../shared/ipc.js';
+import type { LlmProvider, MarketPreviewData, MarketSearchRow, MarketSuggestedData, ShelfRole, SkilBridge, ScanResult, SuggestResult } from '../../shared/ipc.js';
 import { llmKeyHint, toLlmStatus } from '../../shared/llm-settings.js';
 import { forgetFolder, rememberFolder } from '../../shared/recent-folders.js';
 import { ThemeProvider } from './theme';
@@ -218,6 +218,7 @@ export function createTestBridge(engine: ICollectionEngine, options: TestBridgeO
     // index so Discover stays on live Top / Trending.
     // Tests that need shelves override these on the returned bridge.
     marketShelves: async (): Promise<Result<ShelfRole[]>> => ok([]),
+    marketSuggested: async (): Promise<Result<MarketSuggestedData>> => ok({ updatedAt: '', roles: [] }),
     marketSearch: async (): Promise<Result<MarketSearchRow[]>> => ok([]),
     marketPreview: async (id: string): Promise<Result<MarketPreviewData>> =>
       ok({
@@ -286,6 +287,13 @@ export function createTestBridge(engine: ICollectionEngine, options: TestBridgeO
       return ok(undefined);
     },
     suggest: async (shelves, role): Promise<Result<SuggestResult>> => activeEngine.suggest(shelves, { role }),
+    checkAppUpdate: async () =>
+      ok({
+        current: '0.6.0',
+        latest: '0.6.0',
+        newer: false,
+        url: 'https://github.com/eric-huychung/skil/releases',
+      }),
   };
 }
 

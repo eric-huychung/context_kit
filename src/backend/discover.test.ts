@@ -28,6 +28,30 @@ describe('createDiscover', () => {
     expect(search).toEqual({ ok: true, value: [{ id: 'a/one', name: 'One', installs: 3 }] });
   });
 
+  it('reads suggested picks from /api/market/suggested, not an LLM', async () => {
+    const calls: Array<{ url: string; params?: Record<string, string> }> = [];
+    const discover = createDiscover({
+      apiBaseUrl: 'https://www.skil.website',
+      browse: async () => ok([]),
+      get: async (url, config) => {
+        calls.push({ url, params: config?.params });
+        return {
+          data: {
+            data: {
+              updatedAt: '2026-03-09',
+              roles: [{ slug: 'swe', label: 'SWE', skills: [{ id: 'from/api', name: 'From API', installs: 1, rank: 1 }] }],
+            },
+          },
+        };
+      },
+    });
+
+    const result = await discover.suggested('swe');
+
+    expect(calls).toEqual([{ url: 'https://www.skil.website/api/market/suggested', params: { role: 'swe' } }]);
+    expect(isOk(result) && result.value.roles[0]?.skills[0]?.id).toBe('from/api');
+  });
+
   it('does not echo host text when the index fails', async () => {
     const discover = createDiscover({
       apiBaseUrl: 'https://www.skil.website',

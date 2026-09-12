@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { existsSync, readFileSync, writeFileSync, watch as watchDir, type FSWatcher } from 'node:fs';
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { createEngine } from '../../../src/create-engine.js';
+import { LlmCallCache } from '../../../src/llm/llm-call-cache.js';
 import { SkillsAdapter } from '../../../src/adapters/skills-adapter.js';
 import { getApiBaseUrl } from '../../../src/config/website.js';
 import { GLOB_RULE_DIRS, ROOT_RULE_FILES } from '../../../src/core/project-rules.js';
@@ -10,10 +11,11 @@ import { createDiscover } from '../../../src/backend/discover.js';
 import type { ShelfRole } from '../../../src/backend/market-types.js';
 import { DiskWatch, watchFilesByParent } from '../../../src/watch/disk-watch.js';
 import type { ICollectionEngine } from '../../../src/interfaces/engine.js';
-import type { DriftAction, ScanResult } from '../../../src/types/index.js';
+import type { BrowseView, DriftAction, ScanResult } from '../../../src/types/index.js';
 import { isOk } from '../../../src/core/result.js';
 import type { LlmProvider } from '../../../src/llm/llm-chat.js';
 import { IPC_CHANNELS } from '../shared/ipc.js';
+import { checkAppUpdate, GITHUB_LATEST_RELEASE } from '../shared/app-update.js';
 import { forgetFolder, parseRecentFolders, rememberFolder } from '../shared/recent-folders.js';
 import { llmStatus, loadLlmChat, removeLlmKey, revealLlmKey, saveLlmSettings, setActiveLlmKey } from './llm-settings.js';
 
@@ -28,6 +30,8 @@ let projectRoot: string | null = null;
 let recentFolders: string[] = [];
 let diskWatch: DiskWatch | null = null;
 let fsWatchers: FSWatcher[] = [];
+/** Survives LLM key rebind. New project → new cache. */
+let sessionLlmCache = new LlmCallCache();
 const liveSkills = new SkillsAdapter(getApiBaseUrl());
 const discover = createDiscover({
   apiBaseUrl: getApiBaseUrl(),
@@ -36,7 +40,7 @@ const discover = createDiscover({
 
 function currentEngine(): ICollectionEngine {
   if (!engine) {
-    engine = createEngine(join(app.getPath('userData'), 'workspace'), loadLlmChat());
+    engine = createEngine(join(app.getPath('userData'), 'workspace'), loadLlmChat(), sessionLlmCache);
   }
   return engine;
 }
@@ -44,7 +48,7 @@ function currentEngine(): ICollectionEngine {
 /** Rebuilds the current session's engine against the same root with the latest saved LLM settings. */
 function rebindLlmChat(): void {
   const root = projectRoot ?? join(app.getPath('userData'), 'workspace');
-  engine = createEngine(root, loadLlmChat());
+  engine = createEngine(root, loadLlmChat(), sessionLlmCache);
 }
 
 function muteOwnWrites(): void {
@@ -138,7 +142,8 @@ function saveRecentFolders(next: string[]): void {
 
 function bindProject(path: string): string | null {
   try {
-    engine = createEngine(path, loadLlmChat());
+    sessionLlmCache = new LlmCallCache();
+    engine = createEngine(path, loadLlmChat(), sessionLlmCache);
   } catch (error) {
     dialog.showErrorBox('skil', 'Could not open this folder.');
     return null;
@@ -153,6 +158,7 @@ function unbindProject(): void {
   stopDiskWatch();
   engine = null;
   projectRoot = null;
+  sessionLlmCache = new LlmCallCache();
 }
 
 function restoreLastProject(): void {
@@ -164,56 +170,73 @@ function restoreLastProject(): void {
   }
 }
 
-ipcMain.handle(IPC_CHANNELS.getProjectRoot, () => projectRoot);
-ipcMain.handle(IPC_CHANNELS.listRecentFolders, () => recentFolders);
-ipcMain.handle(IPC_CHANNELS.removeRecentFolder, (_event, path: string) => {
+function safeHandle<T extends unknown[]>(
+  channel: string,
+  listener: (event: Electron.IpcMainInvokeEvent, ...args: T) => unknown,
+): void {
+  ipcMain.handle(channel, async (event, ...args: T) => {
+    try {
+      return await listener(event, ...args);
+    } catch (error) {
+      console.error(`ipc ${channel}`, error);
+      throw new Error('Request failed.');
+    }
+  });
+}
+
+safeHandle(IPC_CHANNELS.getProjectRoot, () => projectRoot);
+safeHandle(IPC_CHANNELS.listRecentFolders, () => recentFolders);
+safeHandle(IPC_CHANNELS.removeRecentFolder, (_event, path: string) => {
   saveRecentFolders(forgetFolder(path, recentFolders));
   if (path === projectRoot) unbindProject();
   return recentFolders;
 });
-ipcMain.handle(IPC_CHANNELS.pickProjectFolder, async () => {
+safeHandle(IPC_CHANNELS.pickProjectFolder, async () => {
   const picked = await pickDirectory();
   if (picked === null) {
     return null;
   }
   return bindProject(picked);
 });
-ipcMain.handle(IPC_CHANNELS.bindProjectFolder, (_event, path: string) => bindProject(path));
+safeHandle(IPC_CHANNELS.bindProjectFolder, (_event, path: unknown) => {
+  if (typeof path !== 'string' || path.trim() === '') return null;
+  return bindProject(path);
+});
 
-ipcMain.handle(IPC_CHANNELS.listCollections, () => currentEngine().list());
-ipcMain.handle(IPC_CHANNELS.createCollection, (_event, name: string, skillIds: string[]) => {
+safeHandle(IPC_CHANNELS.listCollections, () => currentEngine().list());
+safeHandle(IPC_CHANNELS.createCollection, (_event, name: string, skillIds: string[]) => {
   const result = currentEngine().create(name, skillIds);
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.removeSkillFromCollection, (_event, name: string, skillId: string) => {
+safeHandle(IPC_CHANNELS.removeSkillFromCollection, (_event, name: string, skillId: string) => {
   const result = currentEngine().removeSkill(name, skillId);
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.setCommandEnabled, async (_event, name: string, enabled: boolean) => {
+safeHandle(IPC_CHANNELS.setCommandEnabled, async (_event, name: string, enabled: boolean) => {
   const result = await currentEngine().setCommandEnabled(name, enabled);
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.browseSkills, (_event, view) => discover.browse(view));
-ipcMain.handle(IPC_CHANNELS.listSkills, () => (projectRoot ? currentEngine().skills() : []));
-ipcMain.handle(IPC_CHANNELS.install, async (_event, skillId: string) => {
+safeHandle(IPC_CHANNELS.browseSkills, (_event, view: BrowseView) => discover.browse(view));
+safeHandle(IPC_CHANNELS.listSkills, () => (projectRoot ? currentEngine().skills() : []));
+safeHandle(IPC_CHANNELS.install, async (_event, skillId: string) => {
   const result = await currentEngine().install(skillId);
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.addSkill, (_event, name: string, skillId: string) => {
+safeHandle(IPC_CHANNELS.addSkill, (_event, name: string, skillId: string) => {
   const result = currentEngine().addSkill(name, skillId);
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.deleteCollection, (_event, name: string) => {
+safeHandle(IPC_CHANNELS.deleteCollection, (_event, name: string) => {
   const result = currentEngine().delete(name);
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.scan, () => {
+safeHandle(IPC_CHANNELS.scan, () => {
   const result = currentEngine().scan();
   muteOwnWrites();
   if (isOk(result)) {
@@ -221,7 +244,7 @@ ipcMain.handle(IPC_CHANNELS.scan, () => {
   }
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.deleteSkill, (_event, skillId: string) => {
+safeHandle(IPC_CHANNELS.deleteSkill, (_event, skillId: string) => {
   const result = currentEngine().deleteSkill(skillId);
   muteOwnWrites();
   if (isOk(result)) {
@@ -229,72 +252,83 @@ ipcMain.handle(IPC_CHANNELS.deleteSkill, (_event, skillId: string) => {
   }
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.usage, () => currentEngine().usage());
-ipcMain.handle(IPC_CHANNELS.marketShelves, () => discover.shelves());
-ipcMain.handle(IPC_CHANNELS.marketSearch, (_event, query: string) => discover.search(query));
-ipcMain.handle(IPC_CHANNELS.marketPreview, (_event, id: string) => discover.preview(id));
-ipcMain.handle(IPC_CHANNELS.readSkillMd, (_event, skillId: string) => currentEngine().readSkillMd(skillId));
-ipcMain.handle(IPC_CHANNELS.originChecks, () => currentEngine().originChecks());
-ipcMain.handle(IPC_CHANNELS.updateFromMarket, async (_event, skillId: string, opts?: { replaceEdited?: boolean }) => {
+safeHandle(IPC_CHANNELS.usage, () => currentEngine().usage());
+safeHandle(IPC_CHANNELS.marketShelves, () => discover.shelves());
+safeHandle(IPC_CHANNELS.marketSuggested, (_event, role?: string) => discover.suggested(role));
+safeHandle(IPC_CHANNELS.marketSearch, (_event, query: string) => discover.search(query));
+safeHandle(IPC_CHANNELS.marketPreview, (_event, id: string) => discover.preview(id));
+safeHandle(IPC_CHANNELS.readSkillMd, (_event, skillId: string) => currentEngine().readSkillMd(skillId));
+safeHandle(IPC_CHANNELS.originChecks, () => currentEngine().originChecks());
+safeHandle(IPC_CHANNELS.updateFromMarket, async (_event, skillId: string, opts?: { replaceEdited?: boolean }) => {
   const result = await currentEngine().updateFromMarket(skillId, opts);
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.setSkillEnabled, async (_event, skillId: string, enabled: boolean) => {
+safeHandle(IPC_CHANNELS.setSkillEnabled, async (_event, skillId: string, enabled: boolean) => {
   const result = await currentEngine().setSkillEnabled(skillId, enabled);
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.listRules, () => currentEngine().rules());
-ipcMain.handle(IPC_CHANNELS.readRule, (_event, id: string) => currentEngine().readRule(id));
-ipcMain.handle(IPC_CHANNELS.setSharedRuleEnabled, (_event, id: string, enabled: boolean) => {
+safeHandle(IPC_CHANNELS.listRules, () => currentEngine().rules());
+safeHandle(IPC_CHANNELS.readRule, (_event, id: string) => currentEngine().readRule(id));
+safeHandle(IPC_CHANNELS.setSharedRuleEnabled, (_event, id: string, enabled: boolean) => {
   const result = currentEngine().setSharedRuleEnabled(id, enabled);
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.auditSync, () => currentEngine().auditSync());
-ipcMain.handle(IPC_CHANNELS.previewSync, (_event, path: string) => currentEngine().previewSync(path));
-ipcMain.handle(IPC_CHANNELS.importToCanonical, async (_event, ids: string[]) => {
+safeHandle(IPC_CHANNELS.auditSync, () => currentEngine().auditSync());
+safeHandle(IPC_CHANNELS.previewSync, (_event, path: string) => currentEngine().previewSync(path));
+safeHandle(IPC_CHANNELS.importToCanonical, async (_event, ids: string[]) => {
   const result = await currentEngine().importToCanonical(ids);
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.removeLeftovers, async (_event, paths: string[]) => {
+safeHandle(IPC_CHANNELS.removeLeftovers, async (_event, paths: string[]) => {
   const result = await currentEngine().removeLeftovers(paths);
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.resolveDrift, async (_event, id: string, action: DriftAction, path?: string) => {
+safeHandle(IPC_CHANNELS.resolveDrift, async (_event, id: string, action: DriftAction, path?: string) => {
   const result = await currentEngine().resolveDrift(id, action, path);
   muteOwnWrites();
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.health, () => currentEngine().health());
-ipcMain.handle(IPC_CHANNELS.llmStatus, () => llmStatus());
-ipcMain.handle(IPC_CHANNELS.saveLlmSettings, async (_event, provider: LlmProvider, apiKey: string) => {
+safeHandle(IPC_CHANNELS.health, () => currentEngine().health());
+safeHandle(IPC_CHANNELS.llmStatus, () => llmStatus());
+safeHandle(IPC_CHANNELS.saveLlmSettings, async (_event, provider: LlmProvider, apiKey: string) => {
   const result = await saveLlmSettings(provider, apiKey);
   if (isOk(result)) {
     rebindLlmChat();
   }
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.setActiveLlmKey, (_event, id: string) => {
+safeHandle(IPC_CHANNELS.setActiveLlmKey, (_event, id: string) => {
   const result = setActiveLlmKey(id);
   if (isOk(result)) {
     rebindLlmChat();
   }
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.revealLlmKey, (_event, id: string) => revealLlmKey(id));
-ipcMain.handle(IPC_CHANNELS.removeLlmKey, (_event, id: string) => {
+safeHandle(IPC_CHANNELS.revealLlmKey, (_event, id: string) => revealLlmKey(id));
+safeHandle(IPC_CHANNELS.removeLlmKey, (_event, id: string) => {
   const result = removeLlmKey(id);
   if (isOk(result)) {
     rebindLlmChat();
   }
   return result;
 });
-ipcMain.handle(IPC_CHANNELS.suggest, (_event, shelves: ShelfRole[], role?: string) =>
+safeHandle(IPC_CHANNELS.suggest, (_event, shelves: ShelfRole[], role?: string) =>
   currentEngine().suggest(shelves, { role }),
+);
+safeHandle(IPC_CHANNELS.checkAppUpdate, () =>
+  checkAppUpdate(app.getVersion(), async () => {
+    const response = await fetch(GITHUB_LATEST_RELEASE, {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'skil' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) throw new Error(`github ${response.status}`);
+    return response.json();
+  }),
 );
 
 // Brand icon (regenerate via scripts/generate-icons.mjs). out/main -> gui/resources.

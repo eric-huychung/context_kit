@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ok } from '../core/result.js';
 import { InMemoryMarketStore } from './in-memory-market-store.js';
 import type { MarketSkillsClient } from './market-client.js';
-import { handleMarketPreviewRequest, handleMarketSearchRequest, handleShelvesRequest } from './market-read.js';
+import { handleMarketPreviewRequest, handleMarketSearchRequest, handleShelvesRequest, handleSuggestedRequest } from './market-read.js';
 
 function listing(id: string, overrides: Partial<{ name: string; installs: number }> = {}) {
   return {
@@ -96,6 +96,47 @@ describe('handleShelvesRequest', () => {
     store.listShelves = async () => ({ ok: false, error: new Error('connection lost at db.internal:5432') });
 
     const response = await handleShelvesRequest(new Request('http://localhost/api/market/shelves'), { store });
+    const body = (await response.json()) as { error: string; message: string };
+
+    expect(response.status).toBe(500);
+    expect(body.error).toBe('store_error');
+    expect(body.message).toBe('Market index is temporarily unavailable.');
+    expect(body.message).not.toContain('connection lost');
+    expect(body.message).not.toContain('db.internal');
+  });
+});
+
+describe('handleSuggestedRequest', () => {
+  it('hydrates yaml picks from the store and does not need an LLM client', async () => {
+    const store = new InMemoryMarketStore();
+    await store.upsertListing(
+      listing('mattpocock/skills/tdd', { name: 'tdd', installs: 42 }),
+      '2026-01-01T00:00:00.000Z',
+    );
+
+    const response = await handleSuggestedRequest(new Request('http://localhost/api/market/suggested?role=swe'), {
+      store,
+    });
+    const body = (await response.json()) as {
+      data: { roles: Array<{ slug: string; skills: Array<{ id: string; installs: number }> }> };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.data.roles).toHaveLength(1);
+    expect(body.data.roles[0]?.slug).toBe('swe');
+    expect(body.data.roles[0]?.skills.some((skill) => skill.id === 'mattpocock/skills/tdd' && skill.installs === 42)).toBe(
+      true,
+    );
+    expect(response.headers.get('Cache-Control')).toBe('public, s-maxage=3600, stale-while-revalidate=1800');
+  });
+
+  it('returns a 500 without the store error text when the store fails', async () => {
+    const store = new InMemoryMarketStore();
+    store.getListing = async () => ({ ok: false, error: new Error('connection lost at db.internal:5432') });
+
+    const response = await handleSuggestedRequest(new Request('http://localhost/api/market/suggested?role=swe'), {
+      store,
+    });
     const body = (await response.json()) as { error: string; message: string };
 
     expect(response.status).toBe(500);

@@ -55,6 +55,13 @@ export const PARKED_RULES_ROOT = `${PARKED_ROOT}/rules`;
 /** A leftover tree we already retired via the adopt-and-deprecate cleanup. Never scanned. */
 export const DEPRECATED_ROOT = '.skil/deprecated';
 
+/** Skill/command/rule ids become path segments. Reject escapes and junk. */
+export function isSafeCatalogId(id: string): boolean {
+  if (id.length === 0 || id.length > 200) return false;
+  if (id.startsWith('/') || id.includes('\\') || id.includes('\0')) return false;
+  return id.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
+}
+
 function underPrefix(prefix: string, id: string): string {
   return `${prefix}/${id}`;
 }

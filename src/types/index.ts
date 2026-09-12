@@ -202,9 +202,9 @@ export type HealthReport = CommandHealth[];
 
 /**
  * `suggest()`'s return shape: an ordered id shortlist (~15-20). Without a
- * key this is the editorial list from `data/market-picks.yaml`; with a key
- * the LLM reranks role-filtered shelf candidates against `package.json`.
- * Ids only — the caller hydrates name/installs for display.
+ * key this is the editorial list (`editorialIds` or `data/market-picks.yaml`);
+ * with a key the LLM reranks role-filtered shelf candidates against
+ * `package.json`. Ids only — the caller hydrates name/installs for display.
  */
 export interface SuggestResult {
   ids: string[];

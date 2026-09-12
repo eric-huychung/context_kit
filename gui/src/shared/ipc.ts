@@ -1,10 +1,13 @@
 import type { Result } from '../../../src/core/result.js';
 import type { AdoptResult, BrowseView, Collection, CommandHealth, DriftAction, Finding, HealthReport, IDE, OriginCheck, OriginStatus, RuleRecord, ScanResult, Skill, SkillRecord, SuggestResult, SyncAudit, SyncPreview, SyncRow, UsageRow } from '../../../src/types/index.js';
-import type { MarketSearchRow, ShelfRole } from '../../../src/backend/market-types.js';
+import type { MarketSearchRow, MarketSuggestedData, ShelfRole } from '../../../src/backend/market-types.js';
 import type { LlmProvider } from '../../../src/llm/llm-chat.js';
 import type { LlmStatus, LlmKeyRow } from './llm-settings.js';
+import type { AppUpdate } from './app-update.js';
 
-export type { AdoptResult, BrowseView, Collection, CommandHealth, DriftAction, Finding, HealthReport, IDE, LlmKeyRow, LlmProvider, LlmStatus, MarketSearchRow, OriginCheck, OriginStatus, Result, RuleRecord, ScanResult, ShelfRole, Skill, SkillRecord, SuggestResult, SyncAudit, SyncPreview, SyncRow, UsageRow };
+export type { AppUpdate };
+
+export type { AdoptResult, BrowseView, Collection, CommandHealth, DriftAction, Finding, HealthReport, IDE, LlmKeyRow, LlmProvider, LlmStatus, MarketSearchRow, MarketSuggestedData, OriginCheck, OriginStatus, Result, RuleRecord, ScanResult, ShelfRole, Skill, SkillRecord, SuggestResult, SyncAudit, SyncPreview, SyncRow, UsageRow };
 
 /**
  * Client-side shape of `GET /api/market/preview`'s `data` — not exported by
@@ -48,6 +51,7 @@ export const IPC_CHANNELS = {
   deleteSkill: 'skil:delete-skill',
   usage: 'skil:usage',
   marketShelves: 'skil:market-shelves',
+  marketSuggested: 'skil:market-suggested',
   marketSearch: 'skil:market-search',
   marketPreview: 'skil:market-preview',
   readSkillMd: 'skil:read-skill-md',
@@ -69,6 +73,7 @@ export const IPC_CHANNELS = {
   revealLlmKey: 'skil:reveal-llm-key',
   removeLlmKey: 'skil:remove-llm-key',
   suggest: 'skil:suggest',
+  checkAppUpdate: 'skil:check-app-update',
 } as const;
 
 /**
@@ -121,6 +126,8 @@ export interface SkilBridge {
   usage(): Promise<Result<UsageRow[]>>;
   /** Market index (Discover backend): role -> category -> top skills. Empty `data: []` if the index has no sync yet. */
   marketShelves(): Promise<Result<ShelfRole[]>>;
+  /** Editorial picks from `GET /api/market/suggested`. No LLM — same payload as the website. */
+  marketSuggested(role?: string): Promise<Result<MarketSuggestedData>>;
   /** Market index search across the full stored index (not just shelved skills). */
   marketSearch(query: string): Promise<Result<MarketSearchRow[]>>;
   /** Market index preview: stored listing fields plus a live SKILL.md/audit fetch. */
@@ -176,8 +183,11 @@ export interface SkilBridge {
   /** Deletes a saved key. If it was active, LLM turns off. */
   removeLlmKey(id: string): Promise<Result<void>>;
   /**
-   * Editorial shortlist for `role` (default `swe`), or LLM-reranked shelf
-   * candidates when a key is saved. `shelves` comes from `marketShelves()`.
+   * LLM-reranked shelf candidates when a key is saved. Editorial picks
+   * (no key) come from `marketSuggested()`, not this call — so a missing
+   * packaged yaml file cannot blank the tab.
    */
   suggest(shelves: ShelfRole[], role?: string): Promise<Result<SuggestResult>>;
+  /** GitHub latest release vs this build. Fail closed — never throws. */
+  checkAppUpdate(): Promise<Result<AppUpdate>>;
 }

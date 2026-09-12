@@ -1,24 +1,7 @@
 import type { SkillRecord } from '../../../shared/ipc';
-import {
-  SKILL_SOURCES,
-  skillPathState,
-  type SkillSourceFolder,
-} from '../../../../../src/core/dock-layout.js';
+import { skillPathState } from '../../../../../src/core/dock-layout.js';
 
-export { SKILL_SOURCES, skillPathState, type SkillSourceFolder };
-
-function skillIsUnderSource(paths: string[], source: SkillSourceFolder): boolean {
-  return paths.some((path) => path === source || path.startsWith(`${source}/`));
-}
-
-export function countSkillsBySource(
-  skills: Array<{ paths: string[] }>
-): Array<{ source: SkillSourceFolder; count: number }> {
-  return SKILL_SOURCES.map((source) => ({
-    source,
-    count: skills.filter((skill) => skillIsUnderSource(skill.paths, source)).length,
-  }));
-}
+export { skillPathState };
 
 export function formatScannedAt(date: Date | null): string {
   if (!date) return 'Never';

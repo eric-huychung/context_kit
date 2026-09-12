@@ -1,7 +1,7 @@
 import type { ShelfRole, ShelfSkill } from '../backend/market-types.js';
 import { editorialPickIds, loadMarketPicks, type MarketPicksFile } from '../backend/market-picks.js';
 import type { LlmChat } from '../llm/llm-chat.js';
-import { isOk, ok, type Result } from './result.js';
+import { err, isOk, ok, type Result } from './result.js';
 
 /** Target shortlist size — the LLM is asked for this range; editorial fallback uses the same cap. */
 export const SUGGEST_MIN = 15;
@@ -149,4 +149,42 @@ export async function rerankWithLlm(
 /** Loads editorial picks from the repo file. Tests can pass a fixture instead. */
 export function loadEditorialPicks(): MarketPicksFile {
   return loadMarketPicks();
+}
+
+/** Cache key for one suggest LLM POST — role + deps + candidate ids. */
+export function suggestLlmCacheKey(role: string, deps: string[], candidateIds: string[]): string {
+  return `suggest:${role}:${deps.join('\0')}:${candidateIds.join('\0')}`;
+}
+
+/**
+ * Editorial ids from a `/api/market/suggested` payload. Missing role block
+ * returns `undefined` so the caller can fall back to the yaml file.
+ */
+export function editorialIdsFromRemote(
+  roles: Array<{ slug: string; skills: Array<{ id: string }> }>,
+  role: string,
+): string[] | undefined {
+  const block = roles.find((row) => row.slug === role);
+  return block ? block.skills.map((skill) => skill.id) : undefined;
+}
+
+/**
+ * Prefer ids the caller already fetched from the market API. Yaml is only
+ * opened when those are omitted — Electron's bundled main cannot see
+ * `data/market-picks.yaml`.
+ */
+export function resolveEditorialShortlist(
+  role: string,
+  excludeIds: ReadonlySet<string>,
+  editorialIds?: string[],
+): Result<string[]> {
+  if (editorialIds) {
+    return ok(editorialIds.filter((id) => !excludeIds.has(id)).slice(0, SUGGEST_MAX));
+  }
+  try {
+    return ok(editorialShortlist(loadEditorialPicks(), role, excludeIds));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not load editorial picks.';
+    return err(new Error(message));
+  }
 }

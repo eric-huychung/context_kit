@@ -38,12 +38,12 @@ import { computeLlmFindings, computeSkillFindings, estimateTokens, llmFindingsCa
 import type { LlmFindingsSkillInput } from './health-checks.js';
 import { buildSyncAudit, readSyncBodies } from './workspace-sync.js';
 import {
-  editorialShortlist,
   filterShelvesByRole,
-  loadEditorialPicks,
   parsePackageDeps,
   rankByFingerprint,
   rerankWithLlm,
+  resolveEditorialShortlist,
+  suggestLlmCacheKey,
   SUGGEST_MAX,
 } from './suggest.js';
 import type { LlmChat } from '../llm/llm-chat.js';
@@ -54,6 +54,7 @@ import {
   deprecatedPathFor,
   isLiveSkillPath,
   isParkedPath,
+  isSafeCatalogId,
   liveSkillPaths,
   LIVE_IDES,
   parkedCommandPath,
@@ -78,6 +79,11 @@ const LIVE_IDE_SET = new Set<IDE>(LIVE_IDES);
 /** Store `/build` as `build`. UI may still display the slash. */
 function normalizeCommandName(name: string): string {
   return name.startsWith('/') ? name.slice(1) : name;
+}
+
+function rejectUnsafeCatalogId(id: string, kind: 'skill' | 'command'): Result<never> | undefined {
+  if (isSafeCatalogId(id)) return undefined;
+  return err(new Error(`Invalid ${kind} id.`));
 }
 
 function commandNotFound(name: string): Error {
@@ -193,17 +199,19 @@ const NOOP_USAGE: IUsageCollector = {
 export class CollectionEngine implements ICollectionEngine {
   private state: State;
   private writtenPaths: string[] = [];
-  /** Shared by every health() caller (CLI + Skills/Commands/Rules tabs) for this engine lifetime. */
-  private readonly llmCallCache = new LlmCallCache();
+  /** Shared by every health() / suggest() caller for this engine lifetime. */
+  private readonly llmCallCache: LlmCallCache;
 
   constructor(
     private readonly fs: IFileSystemAdapter,
     private readonly skillsAdapter: ISkillsAdapter,
     private readonly usageCollector: IUsageCollector = NOOP_USAGE,
     private readonly projectRoot: string = process.cwd(),
-    private readonly llmChat?: LlmChat
+    private readonly llmChat?: LlmChat,
+    llmCallCache?: LlmCallCache
   ) {
     this.state = loadState(this.fs);
+    this.llmCallCache = llmCallCache ?? new LlmCallCache();
   }
 
   lastWrittenPaths(): string[] {
@@ -348,20 +356,17 @@ export class CollectionEngine implements ICollectionEngine {
     );
   }
 
-  async suggest(shelves: ShelfRole[], options?: { role?: string }): Promise<Result<SuggestResult>> {
+  async suggest(shelves: ShelfRole[], options?: { role?: string; editorialIds?: string[] }): Promise<Result<SuggestResult>> {
     const role = options?.role ?? 'swe';
     const excludeIds = new Set(this.state.skills.map((skill) => skill.id));
-    let picks;
-    try {
-      picks = loadEditorialPicks();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Could not load editorial picks.';
-      return err(new Error(message));
-    }
-    const editorial = editorialShortlist(picks, role, excludeIds);
+    const chat = this.llmChat;
 
-    if (!this.llmChat) {
-      return ok({ ids: editorial, usedLlm: false });
+    if (!chat) {
+      const editorial = resolveEditorialShortlist(role, excludeIds, options?.editorialIds);
+      if (!isOk(editorial)) {
+        return editorial;
+      }
+      return ok({ ids: editorial.value, usedLlm: false });
     }
 
     const pkgJson = this.fs.readFile('package.json');
@@ -369,10 +374,14 @@ export class CollectionEngine implements ICollectionEngine {
     const roleShelves = filterShelvesByRole(shelves, role);
     const ranked = rankByFingerprint(roleShelves, deps, excludeIds);
     if (ranked.length === 0) {
-      return ok({ ids: editorial, usedLlm: true });
+      const editorial = resolveEditorialShortlist(role, excludeIds, options?.editorialIds);
+      return ok({ ids: isOk(editorial) ? editorial.value : [], usedLlm: true });
     }
 
-    const reranked = await rerankWithLlm(ranked, deps, this.llmChat, role);
+    const candidateIds = ranked.map((skill) => skill.id);
+    const reranked = await this.llmCallCache.run(suggestLlmCacheKey(role, deps, candidateIds), () =>
+      rerankWithLlm(ranked, deps, chat, role)
+    );
     const ids =
       isOk(reranked) && reranked.value.length > 0
         ? reranked.value
@@ -382,6 +391,8 @@ export class CollectionEngine implements ICollectionEngine {
 
   create(name: string, skillIds: string[]): Result<Collection> {
     name = normalizeCommandName(name);
+    const unsafe = rejectUnsafeCatalogId(name, 'command') ?? skillIds.map((id) => rejectUnsafeCatalogId(id, 'skill')).find(Boolean);
+    if (unsafe) return unsafe;
     const existing = this.state.commands.find((c) => c.name === name);
     if (existing) {
       return err(new Error(`Command '${name}' already exists. Choose a different name or run 'skil list' to see existing commands.`));
@@ -405,6 +416,8 @@ export class CollectionEngine implements ICollectionEngine {
 
   addSkill(name: string, skillId: string): Result<Collection> {
     name = normalizeCommandName(name);
+    const unsafe = rejectUnsafeCatalogId(name, 'command') ?? rejectUnsafeCatalogId(skillId, 'skill');
+    if (unsafe) return unsafe;
     const record = this.state.commands.find((c) => c.name === name);
     if (!record) {
       return err(commandNotFound(name));
@@ -457,6 +470,8 @@ export class CollectionEngine implements ICollectionEngine {
     skillId: string,
     opts?: { dest?: string; replace?: boolean; refreshOrigin?: boolean }
   ): Promise<Result<SkillRecord>> {
+    const unsafe = rejectUnsafeCatalogId(skillId, 'skill');
+    if (unsafe) return unsafe;
     const livePaths = liveSkillPaths(skillId).map((path) => underRoot(opts?.dest, path));
     const [agentsPath, ...mirrorPaths] = livePaths as [string, ...string[]];
 

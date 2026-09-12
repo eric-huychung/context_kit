@@ -1,0 +1,20 @@
+appId: website.skil.app
+productName: Skil
+copyright: Copyright © 2026 skil
+directories:
+  output: release
+  buildResources: resources
+files:
+  - out/**/*
+  - package.json
+asar: true
+mac:
+  category: public.app-category.developer-tools
+  icon: resources/icon.png
+  identity: null
+  artifactName: Skil-${arch}.${ext}
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64

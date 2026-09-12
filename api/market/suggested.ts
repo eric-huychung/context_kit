@@ -5,6 +5,7 @@ import { SupabaseMarketStore } from '../../dist/backend/supabase-market-store.js
 /**
  * Vercel Function entry point: `GET /api/market/suggested`. Editorial
  * shortlist from `data/market-picks.yaml`, hydrated against the index.
+ * No LLM — ranking with a user key happens in the app, not here.
  */
 export async function GET(request: Request): Promise<Response> {
   try {
@@ -21,6 +22,7 @@ export async function GET(request: Request): Promise<Response> {
     const store = new SupabaseMarketStore(supabase);
     return await handleSuggestedRequest(request, { store });
   } catch (error) {
+    console.error(error);
     return Response.json({ error: 'function_error', message: 'Request failed.' }, { status: 500 });
   }
 }

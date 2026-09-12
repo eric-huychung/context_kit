@@ -21,6 +21,9 @@ const SECRET_PATTERNS: RegExp[] = [
   /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/,
   /\bghp_[A-Za-z0-9]{36}\b/, // GitHub personal access token
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/, // Slack token
+  /\bsb_secret_[A-Za-z0-9_-]{20,}\b/, // Supabase secret key
+  /\bvck_[A-Za-z0-9]{20,}\b/, // Vercel AI Gateway
+  /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/, // JWT
 ];
 
 function idleCostFinding(skillId: string, description: string): Finding | null {

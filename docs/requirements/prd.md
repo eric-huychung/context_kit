@@ -73,7 +73,7 @@ GUI keeps Discover browse, leftover cleanup, DiskWatch, recents, encrypted keys.
 - Leftover cleanup adopts what's missing and deprecates the rest.
 - Doctor flags idle-cost, fat-body, unused, hash-split, and secrets with no key. A local LLM key adds conflict / vague-trigger. Key stays on this machine, sent only to the provider.
 - Suggested ranks market skills for this `package.json`. No folder → connect prompt. No key → editorial picks + Settings warning. `skil suggest` prints the same ids.
-- A skil `SKILL.md` teaches the agent the scan / skills / file / enable / doctor / suggest / install loop.
+- A skil `SKILL.md` (live pair) teaches the README loop, including `skil skills`. `enable <command>` stays commands-only. Leftovers stay in the app. No `show`.
 
 ## Out of scope
 

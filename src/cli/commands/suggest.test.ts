@@ -59,6 +59,30 @@ describe('runSuggest', () => {
     expect(outcome.message).toContain('mattpocock/skills/improve-codebase-architecture');
   });
 
+  it('uses ids from /api/market/suggested when the role block is present', async () => {
+    const engine = buildEngine();
+    const discover: Discover = {
+      ...fakeDiscover(),
+      suggested: async () =>
+        ok({
+          updatedAt: '2026-03-09',
+          roles: [
+            {
+              slug: 'swe',
+              label: 'SWE',
+              skills: [{ id: 'from/api', name: 'From API', installs: 1, rank: 1 }],
+            },
+          ],
+        }),
+    };
+
+    const outcome = await runSuggest(engine, discover);
+
+    expect(outcome.isError).toBe(false);
+    expect(outcome.message).toContain('from/api');
+    expect(outcome.message).not.toContain('mattpocock/skills/improve-codebase-architecture');
+  });
+
   it('reports a friendly error when the market index fails to load', async () => {
     const engine = buildEngine({ complete: async () => ok('{}') });
     const failingDiscover: Discover = { ...fakeDiscover(), shelves: async () => err(new Error('store_error')) };

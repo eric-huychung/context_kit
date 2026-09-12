@@ -11,7 +11,7 @@ describe('RealFileSystemAdapter', () => {
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'skil-'));
-    adapter = new RealFileSystemAdapter();
+    adapter = new RealFileSystemAdapter(tmpDir);
   });
 
   afterEach(() => {
@@ -116,15 +116,36 @@ describe('RealFileSystemAdapter', () => {
       }
     });
 
-    it('does not prefix an absolute path with the root', () => {
+    it('accepts an absolute path that still lands under the root', () => {
+      const absolutePath = join(tmpDir, 'state.json');
+
+      const result = adapter.writeJSON(absolutePath, { collections: [] });
+
+      expect(isOk(result)).toBe(true);
+      expect(JSON.parse(readFileSync(absolutePath, 'utf-8'))).toEqual({ collections: [] });
+    });
+
+    it('rejects a relative path that would escape the root', () => {
+      const result = adapter.writeFile('../outside.txt', 'nope\n');
+
+      expect(isErr(result)).toBe(true);
+      if (isErr(result)) {
+        expect(result.error.message).toMatch(/outside the project folder/);
+      }
+      expect(readdirSync(tmpDir)).toEqual([]);
+    });
+
+    it('rejects an absolute path outside the root', () => {
       const outside = mkdtempSync(join(tmpdir(), 'skil-outside-'));
       try {
         const absolutePath = join(outside, 'state.json');
-        adapter = new RealFileSystemAdapter(tmpDir);
 
-        adapter.writeJSON(absolutePath, { collections: [] });
+        const result = adapter.writeJSON(absolutePath, { collections: [] });
 
-        expect(JSON.parse(readFileSync(absolutePath, 'utf-8'))).toEqual({ collections: [] });
+        expect(isErr(result)).toBe(true);
+        if (isErr(result)) {
+          expect(result.error.message).toMatch(/outside the project folder/);
+        }
         expect(readdirSync(tmpDir)).toEqual([]);
       } finally {
         rmSync(outside, { recursive: true, force: true });
@@ -229,13 +250,16 @@ describe('RealFileSystemAdapter', () => {
       expect(readFileSync(join(tmpDir, '.cursor', 'skills', 'tdd', 'SKILL.md'), 'utf-8')).toBe('# tdd\n');
     });
 
-    it('does not prefix an absolute path with the root', () => {
+    it('rejects an absolute path outside the root', () => {
       const outside = mkdtempSync(join(tmpdir(), 'skil-outside-'));
       try {
         const absolutePath = join(outside, 'SKILL.md');
-        adapter.writeFile(absolutePath, '# outside\n');
+        const result = adapter.writeFile(absolutePath, '# outside\n');
 
-        expect(adapter.readFile(absolutePath)).toEqual({ ok: true, value: '# outside\n' });
+        expect(isErr(result)).toBe(true);
+        if (isErr(result)) {
+          expect(result.error.message).toMatch(/outside the project folder/);
+        }
         expect(readdirSync(tmpDir)).toEqual([]);
       } finally {
         rmSync(outside, { recursive: true, force: true });

@@ -37,6 +37,7 @@ export async function GET(request: Request): Promise<Response> {
 
     return await handleCronSyncRequest(request, { cronSecret: process.env.CRON_SECRET, sync });
   } catch (error) {
+    console.error(error);
     return Response.json({ error: 'function_error', message: 'Request failed.' }, { status: 500 });
   }
 }

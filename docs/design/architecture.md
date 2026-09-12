@@ -92,7 +92,7 @@ One OpenAI-chat-completions client. Presets: `anthropic` (`claude-haiku-4-5`), `
 
 ## Adapters
 
-**FileSystemAdapter** — JSON state plus walk/read/write/copy/remove. Ids, hashes, and reconcile stay in the engine.
+**FileSystemAdapter** — JSON state plus walk/read/write/copy/remove. The real adapter jails every path under the connected project folder. Ids, hashes, and reconcile stay in the engine.
 
 **SkillsAdapter** — `search` / `browse` via skil's OIDC backend (no user API key). `install` runs `npx skills add --agent universal --copy -y` into `.agents`; the engine `copyDir`s into `.claude`. `skillHash` is the live market SKILL.md hash for Update. Origin: `SKIL_API_URL`, then `CONTEXTKIT_API_URL`, then `website.json`.
 
@@ -102,7 +102,7 @@ One OpenAI-chat-completions client. Presets: `anthropic` (`claude-haiku-4-5`), `
 
 Both thin. Same engine. Bin is `skil`; `contextkit` is an alias.
 
-**CLI = README verbs** (cwd). **GUI = browse + leftovers + preview.** Not feature parity. Catch-up: `tasks/plan.md`.
+**CLI = README verbs** (cwd). The live-pair `SKILL.md` teaches that same loop, including `skil skills`. **GUI = browse + leftovers + preview.** Not feature parity. Catch-up: `tasks/plan.md`.
 
 ```
 skil search | suggest | install
@@ -157,6 +157,10 @@ Load: v6 as-is → v5 `membership` unioned → v4 `skills[]` → v3 `collections
 Id = path relative to the skills root (`build/tdd`). Hash = `SKILL.md` only.
 
 Live command skill: both trees get `skills/<name>/SKILL.md` + `agents/openai.yaml` (`disable-model-invocation: true`). Off moves both to `.skil/parked/commands/<name>/`. `generated_by: skil` is how enable recognizes our folder during the collision check. `addSkill` / `removeSkill` rewrite frontmatter `skills:` and `## Skills` on the live pair only.
+
+## Secrets & runners
+
+Service role, cron secret, AI Gateway, and Vercel OIDC live in server env / `.env` (gitignored). Never `NEXT_PUBLIC_` on the service role. Never in `gui/` or the Next client bundle. Market HTTP handlers are thin adapters over `dist/`. Cron is `Authorization: Bearer $CRON_SECRET`. BYOK keys stay on the user's machine (`safeStorage` / `SKIL_LLM_API_KEY`).
 
 ## Tests
 

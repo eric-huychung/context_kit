@@ -272,9 +272,11 @@ export interface ICollectionEngine {
 
   /**
    * Shortlists ~15-20 market ids not already in the catalog. Without a key
-   * returns the editorial picks for `options.role` (default `swe`). With a
-   * key, LLM-reranks role-filtered shelf candidates against `package.json`.
+   * returns the editorial picks for `options.role` (default `swe`) — from
+   * `options.editorialIds` when the caller already hit `/api/market/suggested`,
+   * otherwise `data/market-picks.yaml`. With a key, LLM-reranks role-filtered
+   * shelf candidates against `package.json` and does not read that yaml file.
    * A failed LLM call falls back to fingerprint order, not an error. Read-only.
    */
-  suggest(shelves: ShelfRole[], options?: { role?: string }): Promise<Result<SuggestResult>>;
+  suggest(shelves: ShelfRole[], options?: { role?: string; editorialIds?: string[] }): Promise<Result<SuggestResult>>;
 }

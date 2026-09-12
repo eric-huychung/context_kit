@@ -4,6 +4,32 @@ All notable changes to skil are documented here. Versions follow [Semantic Versi
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-11
+
+CLI skills, unsigned macOS dmgs, and the open-source repo loop. Main stays deployable.
+
+### Added
+- `skil skills` lists the catalog (on / off). `skil skills enable|disable <id>` parks or restores a skill. `skil enable` stays commands-only.
+- Help `?` sheet: FAQs / Instructions / About, GitHub update check, and Venmo donate (`@echung03`). Footer pings when an update is out.
+- GitHub Actions CI on pull requests and `main`: typecheck, tests, CLI / website / GUI build, plus a tracked-file secret scan. Tag `v*` packages unsigned `Skil-arm64.dmg` / `Skil-x64.dmg`.
+- Contributor Covenant, plus Bug / Feature issue forms. Vulns stay on the private advisory path.
+- Dependabot for npm and GitHub Actions.
+- Marketing `/about`, `/blog`, `/faq`. README has the unsigned-dmg install path.
+
+### Changed
+- Live-pair `SKILL.md` now teaches the README loop, including `skil skills`. Leftovers stay in the app. No `show`.
+- `package.json` is `private` and only packs `dist` — the repo skill library is not an npm artifact.
+- Suggest can use editorial ids from `/api/market/suggested` so the app does not need `data/market-picks.yaml` bundled. LLM suggest shares the same call cache as doctor.
+- CLI uncaught errors print the message and exit 1.
+
+### Removed
+- `skil rules show` — preview stays in the app.
+
+### Security
+- File-system writes stay inside the connected project folder. Skill/command ids that contain `..` are rejected.
+- skills.sh proxy 502s return a fixed message. Cron bearer compare is timing-safe. Doctor also redacts JWT / Supabase / Vercel-gateway shaped strings.
+- Next.js 16.3.5 (RCE advisories on 16.3.0–16.3.2). js-yaml 4.3.2.
+
 ## [0.6.0] - 2026-09-10
 
 Settings key vault and cheaper, cached doctor LLM. Main stays deployable.

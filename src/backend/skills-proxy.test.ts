@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { isErr, isOk } from '../core/result.js';
 import { website } from '../config/website.js';
-import { browseSkills, handleBrowseRequest, searchSkills } from './skills-proxy.js';
+import { browseSkills, handleBrowseRequest, handleSearchRequest, searchSkills } from './skills-proxy.js';
 
 function fakeFetch(response: { status: number; body: unknown }) {
   return vi.fn(async () => ({
@@ -45,7 +45,26 @@ describe('searchSkills', () => {
 
     expect(isErr(result)).toBe(true);
     if (isErr(result)) {
-      expect(result.error.message).toContain('Too many requests');
+      expect(result.error.message).toContain('429');
+      expect(result.error.message).not.toContain('Too many requests');
+    }
+  });
+
+  it('returns an error when skills.sh returns a non-JSON body', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: false,
+      status: 502,
+      json: async () => {
+        throw new SyntaxError('Unexpected token <');
+      },
+    })) as unknown as typeof fetch;
+    const getOidcToken = vi.fn(async () => 'test-oidc-token');
+
+    const result = await searchSkills('react', { fetchImpl, getOidcToken });
+
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain('non-JSON');
     }
   });
 
@@ -108,7 +127,8 @@ describe('browseSkills', () => {
 
     expect(isErr(result)).toBe(true);
     if (isErr(result)) {
-      expect(result.error.message).toContain('leaderboard unavailable');
+      expect(result.error.message).toContain('503');
+      expect(result.error.message).not.toContain('leaderboard unavailable');
     }
   });
 
@@ -185,7 +205,8 @@ describe('handleBrowseRequest', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('returns 502 with the upstream message when skills.sh fails', async () => {
+  it('returns 502 with a generic message when skills.sh fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
     const fetchImpl = fakeFetch({ status: 503, body: { message: 'leaderboard unavailable' } });
     const getOidcToken = vi.fn(async () => 'test-oidc-token');
 
@@ -196,7 +217,7 @@ describe('handleBrowseRequest', () => {
 
     expect(response.status).toBe(502);
     expect(response.headers.get('Cache-Control')).toBeNull();
-    expect(await response.json()).toMatchObject({ error: 'upstream_error', message: expect.stringContaining('leaderboard unavailable') });
+    expect(await response.json()).toEqual({ error: 'upstream_error', message: 'skills.sh unavailable.' });
   });
 
   it('handles relative URLs (as seen in Vercel production)', async () => {
@@ -215,5 +236,34 @@ describe('handleBrowseRequest', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(body);
+  });
+});
+
+describe('handleSearchRequest', () => {
+  it('returns 400 when q is missing', async () => {
+    const fetchImpl = fakeFetch({ status: 200, body: { data: [] } });
+    const getOidcToken = vi.fn(async () => 'test-oidc-token');
+
+    const response = await handleSearchRequest(new Request(`${website.apiBaseUrl}/api/skills/search`), {
+      fetchImpl,
+      getOidcToken,
+    });
+
+    expect(response.status).toBe(400);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('returns 502 with a generic message when skills.sh fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fetchImpl = fakeFetch({ status: 429, body: { message: 'Too many requests' } });
+    const getOidcToken = vi.fn(async () => 'test-oidc-token');
+
+    const response = await handleSearchRequest(new Request(`${website.apiBaseUrl}/api/skills/search?q=react`), {
+      fetchImpl,
+      getOidcToken,
+    });
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: 'upstream_error', message: 'skills.sh unavailable.' });
   });
 });

@@ -4,6 +4,8 @@ import { err, isOk, ok, type Result } from '../core/result.js';
 const SKILLS_SH_SEARCH_URL = 'https://skills.sh/api/v1/skills/search';
 const SKILLS_SH_BROWSE_URL = 'https://skills.sh/api/v1/skills';
 const BROWSE_CACHE_CONTROL = 'public, s-maxage=86400, stale-while-revalidate=3600';
+/** Client-facing 502 copy. Never relay skills.sh / gateway HTML or error text. */
+const UPSTREAM_UNAVAILABLE = 'skills.sh unavailable.';
 
 export type { BrowseView };
 
@@ -17,9 +19,40 @@ export interface SkillsProxyDeps {
   getOidcToken: () => Promise<string>;
 }
 
-interface SkillsSearchErrorBody {
-  error?: string;
-  message?: string;
+/**
+ * A gateway 502/HTML page makes `response.json()` throw. Treat that the
+ * same as any other upstream failure so Vercel never 500s on parse.
+ */
+async function parseJsonBody(response: Response): Promise<Result<unknown>> {
+  try {
+    return ok(await response.json());
+  } catch {
+    return err(new Error(`skills.sh returned a non-JSON response (status ${response.status})`));
+  }
+}
+
+function upstreamErrorResponse(error: Error): Response {
+  console.error(error);
+  return Response.json({ error: 'upstream_error', message: UPSTREAM_UNAVAILABLE }, { status: 502 });
+}
+
+async function fetchSkillsSh(url: string, deps: SkillsProxyDeps): Promise<Result<unknown>> {
+  let response: Response;
+  try {
+    const token = await deps.getOidcToken();
+    response = await deps.fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } });
+  } catch (error) {
+    return err(new Error(`Failed to reach skills.sh: ${(error as Error).message}`));
+  }
+
+  const parsed = await parseJsonBody(response);
+  if (!isOk(parsed)) {
+    return parsed;
+  }
+  if (!response.ok) {
+    return err(new Error(`skills.sh returned ${response.status}`));
+  }
+  return ok(parsed.value);
 }
 
 /**
@@ -29,23 +62,7 @@ interface SkillsSearchErrorBody {
  * deployment can mint this token.
  */
 export async function searchSkills(query: string, deps: SkillsProxyDeps): Promise<Result<unknown>> {
-  const url = `${SKILLS_SH_SEARCH_URL}?q=${encodeURIComponent(query)}`;
-
-  let response: Response;
-  try {
-    const token = await deps.getOidcToken();
-    response = await deps.fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } });
-  } catch (error) {
-    return err(new Error(`Failed to reach skills.sh: ${(error as Error).message}`));
-  }
-
-  const body = await response.json();
-  if (!response.ok) {
-    const errorBody = body as SkillsSearchErrorBody;
-    return err(new Error(errorBody.message ?? `skills.sh returned ${response.status}`));
-  }
-
-  return ok(body);
+  return fetchSkillsSh(`${SKILLS_SH_SEARCH_URL}?q=${encodeURIComponent(query)}`, deps);
 }
 
 /**
@@ -55,23 +72,10 @@ export async function searchSkills(query: string, deps: SkillsProxyDeps): Promis
  * per view. 500 is also the local type-to-filter corpus.
  */
 export async function browseSkills(view: BrowseView, deps: SkillsProxyDeps): Promise<Result<unknown>> {
-  const url = `${SKILLS_SH_BROWSE_URL}?view=${encodeURIComponent(view)}&per_page=500`;
-
-  let response: Response;
-  try {
-    const token = await deps.getOidcToken();
-    response = await deps.fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } });
-  } catch (error) {
-    return err(new Error(`Failed to reach skills.sh: ${(error as Error).message}`));
-  }
-
-  const body = await response.json();
-  if (!response.ok) {
-    const errorBody = body as SkillsSearchErrorBody;
-    return err(new Error(errorBody.message ?? `skills.sh returned ${response.status}`));
-  }
-
-  return ok(body);
+  return fetchSkillsSh(
+    `${SKILLS_SH_BROWSE_URL}?view=${encodeURIComponent(view)}&per_page=500`,
+    deps,
+  );
 }
 
 /**
@@ -92,10 +96,28 @@ export async function handleBrowseRequest(request: Request, deps: SkillsProxyDep
 
   const result = await browseSkills(view, deps);
   if (!isOk(result)) {
-    return Response.json({ error: 'upstream_error', message: result.error.message }, { status: 502 });
+    return upstreamErrorResponse(result.error);
   }
 
   return Response.json(result.value, {
     headers: { 'Cache-Control': BROWSE_CACHE_CONTROL },
   });
+}
+
+/**
+ * Vercel Function handler for `GET /api/skills/search?q=`. Same OIDC proxy
+ * as browse; no CDN cache (query-specific). 502 body stays generic.
+ */
+export async function handleSearchRequest(request: Request, deps: SkillsProxyDeps): Promise<Response> {
+  const query = new URL(request.url, 'http://localhost').searchParams.get('q');
+  if (!query) {
+    return Response.json({ error: 'invalid_request', message: "Missing required 'q' query parameter." }, { status: 400 });
+  }
+
+  const result = await searchSkills(query, deps);
+  if (!isOk(result)) {
+    return upstreamErrorResponse(result.error);
+  }
+
+  return Response.json(result.value);
 }

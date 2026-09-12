@@ -112,6 +112,18 @@ describe('computeSkillFindings', () => {
     expect(findings).toContainEqual(expect.objectContaining({ type: 'secret', skillId: 'tdd' }));
   });
 
+  it('flags supabase, gateway, and jwt-shaped fixtures', () => {
+    const bodies = [
+      'sb_secret_abcdefghijklmnopqrstuvwx',
+      'vck_abcdefghijklmnopqrstuvwxabcdefghij',
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3In0.signaturexx',
+    ];
+    for (const body of bodies) {
+      const findings = computeSkillFindings({ ...base, body });
+      expect(findings).toContainEqual(expect.objectContaining({ type: 'secret', skillId: 'tdd' }));
+    }
+  });
+
   it('does not flag ordinary prose as a secret', () => {
     const findings = computeSkillFindings({ ...base, body: 'This skill helps you skip flaky tests.' });
     expect(findings.some((finding) => finding.type === 'secret')).toBe(false);

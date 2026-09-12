@@ -11,6 +11,20 @@ import WorkspaceWarning from './WorkspaceWarning';
 type AddState = { status: 'success' } | { status: 'error' };
 type Row = { id: string; name: string; installs: number; rank?: number };
 
+/** Survives Discover unmount (Settings toggle) so one LLM rank per project+role. */
+const editorialSuggestCache = new Map<string, Row[]>();
+const llmSuggestCache = new Map<string, { rows: Row[]; usedLlm: boolean }>();
+
+function suggestSessionKey(root: string | null, role: string): string {
+  return `${root ?? ''}::${role}`;
+}
+
+/** Test-only. Production cache lives for the renderer session. */
+export function clearDiscoverSuggestCache(): void {
+  editorialSuggestCache.clear();
+  llmSuggestCache.clear();
+}
+
 /** Live skills.sh browse, same tabs as Landing Discover. */
 const BROWSE_TABS: Array<{ view: BrowseView; label: string }> = [
   { view: 'all-time', label: 'Top' },
@@ -80,7 +94,6 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
     keys: [],
     activeId: null,
   });
-  const suggestCheckedFor = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -123,6 +136,8 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
   const rows: Row[] = searchResults ?? (browseView ? browseRows ?? [] : field?.skills ?? []);
 
   async function loadBrowse(view: BrowseView) {
+    clearSearch();
+    setSuggestedActive(false);
     setBrowseView(view);
     setBrowseError(null);
     const cached = browseCache.current[view];
@@ -154,7 +169,15 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
     }
   }
 
+  function clearSearch() {
+    setQuery('');
+    setSearchResults(null);
+    setSearchError(null);
+    setIsSearching(false);
+  }
+
   function handleRoleSelect(r: ShelfRole) {
+    clearSearch();
     setSuggestedActive(false);
     setBrowseView(null);
     setBrowseError(null);
@@ -163,54 +186,99 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
   }
 
   /**
-   * Editorial picks by default; LLM rerank when a key is on. Caches by
-   * role + on/off so tab switches do not refetch until one of those changes.
+   * Editorial from Vercel; LLM rank once per project+role. Key on/off only
+   * switches which cached list is shown — it does not POST again.
    */
   const runSuggestCheck = useCallback(
     async (role: string) => {
-      const status = await bridge.llmStatus();
+      const [status, root] = await Promise.all([bridge.llmStatus(), bridge.getProjectRoot()]);
       setLlm(status);
       const llmOn = status.hasKey && status.enabled;
-      const cacheKey = `${role}::${llmOn}`;
-      if (suggestCheckedFor.current === cacheKey) {
+      const key = suggestSessionKey(root, role);
+
+      if (!llmOn) {
+        const cached = editorialSuggestCache.get(key);
+        if (cached) {
+          setSuggestGate({ status: 'ready', rows: cached, usedLlm: false });
+          return;
+        }
+        setSuggestGate({ status: 'loading' });
+        const remote = await bridge.marketSuggested(role);
+        if (!remote.ok) {
+          setSuggestGate({ status: 'error' });
+          return;
+        }
+        const catalog = await bridge.listSkills();
+        const exclude = new Set(catalog.map((skill) => skill.id));
+        const skills = remote.value.roles.find((row) => row.slug === role)?.skills ?? [];
+        const rows = skills
+          .filter((skill) => !exclude.has(skill.id))
+          .map((skill, index) => ({
+            id: skill.id,
+            name: skill.name,
+            installs: skill.installs,
+            rank: skill.rank ?? index + 1,
+          }));
+        editorialSuggestCache.set(key, rows);
+        setSuggestGate({ status: 'ready', rows, usedLlm: false });
         return;
       }
+
+      const cached = llmSuggestCache.get(key);
+      if (cached) {
+        setSuggestGate({ status: 'ready', rows: cached.rows, usedLlm: cached.usedLlm });
+        return;
+      }
+
       setSuggestGate({ status: 'loading' });
-      const shelvesResult = await bridge.marketShelves();
-      const shelves = shelvesResult.ok ? shelvesResult.value : [];
-      let result;
+      const shelvesPromise = bridge.marketShelves();
+      const remotePromise = bridge.marketSuggested(role);
+      const shelvesResult = await shelvesPromise;
+      const nextShelves = shelvesResult.ok ? shelvesResult.value : [];
       try {
-        result = await bridge.suggest(shelves, role);
+        const [remote, ranked] = await Promise.all([remotePromise, bridge.suggest(nextShelves, role)]);
+        const byId = shelfRowsById(nextShelves);
+        if (remote.ok) {
+          for (const skill of remote.value.roles.flatMap((row) => row.skills)) {
+            if (!byId.has(skill.id)) {
+              byId.set(skill.id, { id: skill.id, name: skill.name, installs: skill.installs });
+            }
+          }
+        }
+        if (!ranked.ok) {
+          setSuggestGate({ status: 'error' });
+          return;
+        }
+        const rows = ranked.value.ids.map((id, index) => {
+          const known = byId.get(id);
+          const slug = id.split('/').pop() ?? id;
+          return known ?? { id, name: slug, installs: 0, rank: index + 1 };
+        });
+        llmSuggestCache.set(key, { rows, usedLlm: ranked.value.usedLlm });
+        setSuggestGate({ status: 'ready', rows, usedLlm: ranked.value.usedLlm });
       } catch {
         setSuggestGate({ status: 'error' });
-        return;
       }
-      if (!result.ok) {
-        setSuggestGate({ status: 'error' });
-        return;
-      }
-      const byId = shelfRowsById(shelves);
-      const rows = result.value.ids.map((id, index) => {
-        const known = byId.get(id);
-        const slug = id.split('/').pop() ?? id;
-        return known ?? { id, name: slug, installs: 0, rank: index + 1 };
-      });
-      suggestCheckedFor.current = cacheKey;
-      setSuggestGate({ status: 'ready', rows, usedLlm: result.value.usedLlm });
     },
     [bridge]
   );
 
   function handleSelectSuggested() {
+    clearSearch();
     setBrowseView(null);
     setBrowseError(null);
     setSuggestedActive(true);
     void runSuggestCheck(suggestRole);
   }
 
+  function handleSelectSkillsSh() {
+    clearSearch();
+    setSuggestedActive(false);
+  }
+
   function handleSuggestRoleSelect(slug: string) {
+    clearSearch();
     setSuggestRole(slug);
-    suggestCheckedFor.current = null;
     void runSuggestCheck(slug);
   }
 
@@ -239,7 +307,6 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
 
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSuggestedActive(false);
     await runMarketSearch(query.trim());
   }
 
@@ -261,8 +328,9 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
     }));
   }
 
-  const catalogError = searchError ?? (browseView ? browseError : null);
-  const showSkeleton = shelves === null || isSearching || isBrowsing;
+  const searchActive = searchResults !== null || searchError !== null || isSearching;
+  const catalogError = searchError ?? (!searchActive && browseView ? browseError : null);
+  const showSkeleton = shelves === null || isSearching || (!searchActive && !suggestedActive && isBrowsing);
 
   function renderSkillRow(skill: Row, index: number) {
     const addState = addStates[skill.id];
@@ -317,9 +385,12 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
         {suggestedActive && !(llm.hasKey && llm.enabled) && (
           <WorkspaceWarning
             text={llm.hasKey ? 'Editorial picks only — LLM off' : 'Editorial picks only — no LLM key'}
-            actionLabel="Settings"
-            actionAriaLabel="Open LLM settings"
-            onAction={() => onOpenSettings?.()}
+            title={
+              llm.hasKey
+                ? 'Turn the key on in Settings to rank by this repo.'
+                : 'Add a key in Settings to rank by this repo.'
+            }
+            onAction={onOpenSettings ? () => onOpenSettings() : undefined}
           />
         )}
       </div>
@@ -340,9 +411,9 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
         </label>
       </form>
 
-      {shelves && searchResults === null && (
+      {shelves && (
         <>
-          <div role="tablist" aria-label="Role" className="filter-row role-tabs">
+          <div role="tablist" aria-label="Discover" className="filter-row role-tabs">
             <button
               type="button"
               role="tab"
@@ -352,71 +423,97 @@ export default function MarketDiscover({ onOpenSettings }: { onOpenSettings?: ()
             >
               Suggested
             </button>
-            {BROWSE_TABS.map((tab) => (
-              <button
-                key={tab.view}
-                type="button"
-                role="tab"
-                aria-selected={!suggestedActive && browseView === tab.view}
-                onClick={() => {
-                  setSuggestedActive(false);
-                  void loadBrowse(tab.view);
-                }}
-                className={`filter ${!suggestedActive && browseView === tab.view ? 'active-filter' : ''} ${FOCUS_RING}`}
-              >
-                {tab.label}
-              </button>
-            ))}
-            {!suggestedActive &&
-              shelves.map((r) => (
-                <button
-                  key={r.slug}
-                  type="button"
-                  role="tab"
-                  aria-selected={browseView === null && r.slug === activeRole}
-                  onClick={() => handleRoleSelect(r)}
-                  className={`filter ${browseView === null && r.slug === activeRole ? 'active-filter' : ''} ${FOCUS_RING}`}
-                >
-                  {r.label}
-                </button>
-              ))}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!suggestedActive}
+              onClick={handleSelectSkillsSh}
+              className={`filter ${!suggestedActive ? 'active-filter' : ''} ${FOCUS_RING}`}
+            >
+              skills.sh
+            </button>
           </div>
 
-          {role && browseView === null && !suggestedActive && (
-            <div role="tablist" aria-label="Category" className="filter-row">
-              {role.fields.map((f) => (
+          {suggestedActive && (
+            <div role="tablist" aria-label="Suggested role" className="filter-row">
+              {SUGGEST_ROLE_TABS.map((tab) => (
                 <button
-                  key={f.slug}
+                  key={tab.slug}
                   type="button"
                   role="tab"
-                  aria-selected={f.slug === activeField}
-                  onClick={() => setActiveField(f.slug)}
-                  className={`filter ${f.slug === activeField ? 'active-filter' : ''} ${FOCUS_RING}`}
+                  aria-selected={suggestRole === tab.slug}
+                  onClick={() => handleSuggestRoleSelect(tab.slug)}
+                  className={`filter ${suggestRole === tab.slug ? 'active-filter' : ''} ${FOCUS_RING}`}
                 >
-                  {f.label}
+                  {tab.label}
                 </button>
               ))}
             </div>
           )}
+
+          {!suggestedActive && (
+            <>
+              <div role="tablist" aria-label="skills.sh" className="filter-row">
+                {BROWSE_TABS.map((tab) => (
+                  <button
+                    key={tab.view}
+                    type="button"
+                    role="tab"
+                    aria-selected={browseView === tab.view}
+                    onClick={() => {
+                      void loadBrowse(tab.view);
+                    }}
+                    className={`filter ${browseView === tab.view ? 'active-filter' : ''} ${FOCUS_RING}`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+                {shelves.map((r) => (
+                  <button
+                    key={r.slug}
+                    type="button"
+                    role="tab"
+                    aria-selected={browseView === null && r.slug === activeRole}
+                    onClick={() => handleRoleSelect(r)}
+                    className={`filter ${browseView === null && r.slug === activeRole ? 'active-filter' : ''} ${FOCUS_RING}`}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+
+              {role && browseView === null && (
+                <div role="tablist" aria-label="Category" className="filter-row">
+                  {role.fields.map((f) => (
+                    <button
+                      key={f.slug}
+                      type="button"
+                      role="tab"
+                      aria-selected={f.slug === activeField}
+                      onClick={() => {
+                        clearSearch();
+                        setActiveField(f.slug);
+                      }}
+                      className={`filter ${f.slug === activeField ? 'active-filter' : ''} ${FOCUS_RING}`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
 
-      {suggestedActive ? (
+      {searchActive ? (
         <>
-          <div role="tablist" aria-label="Suggested role" className="filter-row">
-            {SUGGEST_ROLE_TABS.map((tab) => (
-              <button
-                key={tab.slug}
-                type="button"
-                role="tab"
-                aria-selected={suggestRole === tab.slug}
-                onClick={() => handleSuggestRoleSelect(tab.slug)}
-                className={`filter ${suggestRole === tab.slug ? 'active-filter' : ''} ${FOCUS_RING}`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+          {showSkeleton && <StatusSkeleton />}
+          {catalogError && !showSkeleton && <StatusNotice kind={catalogError} onRetry={retryFailedCatalog} />}
+          {shelves && !showSkeleton && !catalogError && <ul className="skill-list">{rows.map(renderSkillRow)}</ul>}
+        </>
+      ) : suggestedActive ? (
+        <>
           {suggestGate.status === 'loading' && <StatusSkeleton />}
           {suggestGate.status === 'error' && (
             <StatusNotice kind="load" onRetry={() => void runSuggestCheck(suggestRole)} />

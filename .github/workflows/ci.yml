@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Secret scan (tracked files)
+        run: |
+          if git grep -I -nE \
+            'sb_secret_[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|vck_[A-Za-z0-9]{20,}' \
+            -- ':!package-lock.json' ':!**/package-lock.json' ':!**/*.test.ts' ':!**/*.test.tsx' ':!src/core/health-checks.ts' ':!.github/workflows/ci.yml'; then
+            echo 'Possible secret in tracked files'
+            exit 1
+          fi
+      - run: npm run ci
