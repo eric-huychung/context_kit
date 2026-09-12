@@ -10,7 +10,8 @@ import {
   installTestBridge,
   renderWithProviders,
 } from './test-utils';
-import { err, isOk } from '../../../../src/core/result.js';
+import { err, isOk, ok } from '../../../../src/core/result.js';
+import { version as APP_VERSION } from '../../../package.json';
 
 async function openSync() {
   await userEvent.click(screen.getByRole('tab', { name: 'Sync' }));
@@ -25,6 +26,13 @@ async function openCommandsWorkspace() {
   await screen.findByRole('heading', { name: 'Commands' });
 }
 
+function syncMetric(label: string) {
+  const el = screen.getByText(label, { selector: '.found-label' });
+  const card = el.closest('.sync-metric-card');
+  if (!card) throw new Error(`expected ${label} metric card`);
+  return card as HTMLElement;
+}
+
 describe('App', () => {
   it('mounts on Commands with the empty commands UI, not a pick-folder wall', async () => {
     installTestBridge(createInMemoryEngine());
@@ -32,7 +40,8 @@ describe('App', () => {
     renderWithProviders(<App />);
 
     expect(screen.getByText('Skil')).toBeInTheDocument();
-    expect(screen.getByText('skil 0.5.0')).toBeInTheDocument();
+    expect(screen.getByText('Free and open source')).toBeInTheDocument();
+    expect(screen.getByText(`skil ${APP_VERSION}`)).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Commands' })).toHaveAttribute('aria-selected', 'true');
     expect(await screen.findByRole('heading', { name: 'Commands' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open Cursor workspace' })).not.toBeInTheDocument();
@@ -55,12 +64,14 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Sync' }));
 
     expect(screen.getByRole('status', { name: 'Loading sync' })).toBeInTheDocument();
-    expect(screen.queryByText('Skills found')).not.toBeInTheDocument();
+    expect(screen.queryByText('Skills', { selector: '.found-label' })).not.toBeInTheDocument();
     expect(screen.queryByText('Loading\u2026')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pick folder' })).toBeInTheDocument();
 
     resolveRecents([]);
-    expect(await screen.findByText('Skills found')).toBeInTheDocument();
+    expect(await screen.findByText('Skills', { selector: '.found-label' })).toBeInTheDocument();
+    expect(screen.getByText('Commands', { selector: '.found-label' })).toBeInTheDocument();
+    expect(screen.getByText('Rules', { selector: '.found-label' })).toBeInTheDocument();
     expect(screen.queryByRole('status', { name: 'Loading sync' })).not.toBeInTheDocument();
   });
 
@@ -109,6 +120,26 @@ describe('App', () => {
     expect(screen.getByRole('tab', { name: 'Discover' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByLabelText('Search skills')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Pick a project folder' })).not.toBeInTheDocument();
+  });
+
+  it('keeps topbar, rail, and footer as shell chrome across tabs', async () => {
+    installTestBridge(createInMemoryEngine());
+    renderWithProviders(<App />);
+    await screen.findByRole('heading', { name: 'Commands' });
+
+    const shell = document.querySelector('.app-shell');
+    expect(shell?.querySelector(':scope > .topbar')).toBeTruthy();
+    expect(shell?.querySelector(':scope > .workspace > .rail')).toBeTruthy();
+    expect(shell?.querySelector(':scope > .footer-bar')).toBeTruthy();
+    expect(document.querySelector('.panel-section .topbar')).toBeNull();
+    expect(document.querySelector('.panel-section .rail')).toBeNull();
+    expect(document.querySelector('.panel-section .footer-bar')).toBeNull();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Discover' }));
+    await screen.findByRole('heading', { name: 'Discover' });
+    expect(shell?.querySelector(':scope > .topbar')).toBeTruthy();
+    expect(shell?.querySelector(':scope > .workspace > .rail')).toBeTruthy();
+    expect(shell?.querySelector(':scope > .footer-bar')).toBeTruthy();
   });
 
   it('puts Skills on the rail above Commands and names each tab for hover', async () => {
@@ -174,8 +205,10 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: 'Re-scan' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Re-scan' })).not.toHaveTextContent(/re-scan/i);
     expect(screen.queryByText('Last scanned Never')).not.toBeInTheDocument();
-    expect(screen.getByText('Skills found')).toBeInTheDocument();
-    expect(screen.getByText('Skills by source')).toBeInTheDocument();
+    expect(screen.getByText('Skills', { selector: '.found-label' })).toBeInTheDocument();
+    expect(screen.getByText('Commands', { selector: '.found-label' })).toBeInTheDocument();
+    expect(screen.getByText('Rules', { selector: '.found-label' })).toBeInTheDocument();
+    expect(screen.queryByText('Skills by source')).not.toBeInTheDocument();
   });
 
   it('keeps Re-scan next to the header path after leaving Sync', async () => {
@@ -206,43 +239,39 @@ describe('App', () => {
     renderWithProviders(<App />);
     await openSync();
 
-    const found = screen.getByText('Skills found').closest('.skills-found-card');
-    if (!found) throw new Error('expected skills found card');
-    expect(within(found as HTMLElement).getByText('0')).toBeInTheDocument();
-    expect(screen.getByText('.claude')).toBeInTheDocument();
-    expect(screen.getByText('.windsurf')).toBeInTheDocument();
-    expect(screen.getByText('.agents')).toBeInTheDocument();
+    expect(within(syncMetric('Skills')).getByText('0')).toBeInTheDocument();
+    expect(within(syncMetric('Commands')).getByText('0')).toBeInTheDocument();
+    expect(within(syncMetric('Rules')).getByText('0')).toBeInTheDocument();
     expect(screen.queryByText('7')).not.toBeInTheDocument();
+    expect(screen.queryByText('Skills by source')).not.toBeInTheDocument();
   });
 
-  it('rescans from the icon and shows skills found next to skills by source', async () => {
+  it('rescans from the icon and shows skills, commands, and rules counts', async () => {
     const { engine, fs } = createInMemoryWorkspace();
     fs.writeFile('.cursor/skills/tdd/SKILL.md', '# tdd\n');
     fs.writeFile('.claude/skills/ui/SKILL.md', '# ui\n');
+    fs.writeFile('AGENTS.md', '<!-- skil:rule behavior -->\n# body\n<!-- /skil:rule behavior -->\n');
+    engine.create('build', ['tdd']);
     installTestBridge(engine);
 
     renderWithProviders(<App />);
     await clickPickFolder();
 
     await waitFor(() => {
-      const found = screen.getByText('Skills found').closest('.skills-found-card');
-      if (!found) throw new Error('expected skills found card');
-      expect(within(found as HTMLElement).getByText('2')).toBeInTheDocument();
+      expect(within(syncMetric('Skills')).getByText('2')).toBeInTheDocument();
     });
-    expect(screen.getByText('.cursor')).toBeInTheDocument();
-    expect(screen.getByText('.claude')).toBeInTheDocument();
+    expect(within(syncMetric('Commands')).getByText('1')).toBeInTheDocument();
+    expect(within(syncMetric('Rules')).getByText('1')).toBeInTheDocument();
 
     fs.writeFile('.windsurf/skills/lint/SKILL.md', '# lint\n');
     fs.writeFile('.agents/skills/review/SKILL.md', '# review\n');
     await userEvent.click(screen.getByRole('button', { name: 'Re-scan' }));
 
     await waitFor(() => {
-      const card = screen.getByText('Skills found').closest('.skills-found-card');
-      if (!card) throw new Error('expected skills found card');
-      expect(within(card as HTMLElement).getByText('4')).toBeInTheDocument();
+      expect(within(syncMetric('Skills')).getByText('4')).toBeInTheDocument();
     });
-    expect(screen.getByText('.windsurf')).toBeInTheDocument();
-    expect(screen.getByText('.agents')).toBeInTheDocument();
+    expect(within(syncMetric('Commands')).getByText('1')).toBeInTheDocument();
+    expect(within(syncMetric('Rules')).getByText('1')).toBeInTheDocument();
   });
 
   it('leaves the bound folder unchanged when the picker is canceled', async () => {
@@ -305,7 +334,27 @@ describe('App', () => {
     renderWithProviders(<App />);
     await userEvent.click(screen.getByRole('button', { name: 'Help' }));
 
-    expect(screen.getByRole('dialog', { name: 'How can we help?' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Three problems. One map.' })).toBeInTheDocument();
+  });
+
+  it('opens help from the footer when a newer release exists', async () => {
+    const inner = createTestBridge(createInMemoryEngine());
+    window.skil = {
+      ...inner,
+      checkAppUpdate: async () =>
+        ok({
+          current: APP_VERSION,
+          latest: '9.9.9',
+          newer: true,
+          url: 'https://github.com/eric-huychung/skil/releases/tag/v9.9.9',
+        }),
+    };
+
+    renderWithProviders(<App />);
+    expect(screen.getByText('Free and open source')).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: '9.9.9 is out' }));
+
+    expect(screen.getByRole('dialog', { name: 'About Skil' })).toBeInTheDocument();
   });
 
   it('updates Commands skill counts after deleting a filed skill', async () => {

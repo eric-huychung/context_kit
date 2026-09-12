@@ -1,82 +1,106 @@
 ---
 name: skil
-description: Use skil to scan a repo's AI skill folders, file them onto SDLC commands, toggle skills/commands on and off, run doctor, get suggestions, and install market skills. Use when the user asks about their .agents/.claude skill setup, wants to organize skills into commands, or mentions skil, skil scan, skil doctor, skil suggest, or skil install.
+description: Use skil to scan a repo's AI skill folders, file them onto SDLC commands, toggle skills/commands on and off, run doctor, get suggestions, and install market skills. Use when the user asks about their .agents/.claude skill setup, wants to organize skills into commands, or mentions skil, skil scan, skil skills, skil doctor, skil suggest, or skil install.
 ---
 
 # skil
 
-skil is a CLI (and desktop GUI) that keeps a project's AI skill folders mapped onto named SDLC commands (`/build`, `/tdd`, ...) and mirrored into two **live trees**: `.agents/skills` and `.claude/skills`. On/off is a path, not a flag — this skill teaches the six verbs that make up the whole loop: `scan`, `file` (`add`/`remove`), `enable`/`disable`, `doctor`, `suggest`, and `install`.
+skil maps this project's AI skill folders onto named SDLC commands (`/build`) and mirrors them into two **live trees**: `.agents/skills` and `.claude/skills`. On/off is a path, not a flag.
 
-Everything below is scoped to the project skil is already bound to (CLI = current working directory). Run `skil --help` or `skil <command> --help` if a flag looks stale against this doc — the CLI is the source of truth for exact flags.
+CLI = current working directory. `skil --help` is source of truth for flags. Leftovers (old folders like `.cursor/skills`) — clean those in the app. No `show`.
 
-## 1. Scan — see what's on disk
+On = a copy in both `.agents/skills` and `.claude/skills` (the live pair). Off = parked under `.skil/parked`, not deleted.
+
+## Find
+
+```bash
+skil search
+skil search --trending
+skil search react
+skil suggest
+skil install obra/react-patterns
+```
+
+- `search` — top 10 by installs
+- `search --trending` — what’s hot
+- `search react` — lookup by name
+- `suggest` — picks for this repo (doesn’t install). Editorial with no key; LLM-rerank with `SKIL_LLM_PROVIDER` + `SKIL_LLM_API_KEY`
+- `install …` — drop that skill into the live pair. Use the name in the left column from search.
+
+## Organize
+
+### Skills
 
 ```bash
 skil scan
+skil skills
+skil skills enable tdd
+skil skills disable tdd
 ```
 
-Unions the live pair (`.agents/skills`, `.claude/skills`), every leftover skill root (`.cursor/skills`, `.codex/skills`, `.github/skills`, `.windsurf/skills`), and the parked root into one catalog. Read-only pull — it never writes a folder, never invents a command from a skill folder, and never moves anything live↔parked. Run this first in an unfamiliar repo, and again any time skill folders changed outside skil.
+- `scan` — find `SKILL.md` folders in this repo. Read only.
+- `skills` — what’s in the catalog (on / off)
+- `skills enable` / `disable` — turn one skill on or off. Not `skil enable` — that one’s for commands.
 
-## 2. File a skill onto a command
+### Commands
+
+A command is a workflow (`build` → `/build`). Adding a skill to it doesn’t turn that skill on.
 
 ```bash
-skil create build --skills tdd,ui         # empty or seeded command; starts off
-skil add build design                     # file 'design' onto /build
-skil remove build design                  # unfile it
-skil list                                 # print the project map
-skil delete build                         # drop the command (+ its live/parked folders)
+skil create build --skills tdd
+skil list
+skil add build design
+skil remove build design
+skil enable build
+skil disable build
+skil delete build
 ```
 
-Filing edits `/build`'s `## Skills` list only — it does **not** turn the filed skill on and does not install anything. A command name never keeps its leading slash in storage (`/build` → `build`); the CLI accepts either form.
+- `create` — make a command (starts off)
+- `list` — what’s on the map
+- `add` / `remove` — put a skill on a command, or take it off
+- `enable` — turn the command on (writes a human-only skill into both live trees)
+- `disable` — park it
+- `delete` — drop the command
 
-## 3. Enable / disable — the only write
+`skil enable` / `skil disable` take a **command** name. For a skill id use `skil skills enable|disable`.
+
+### Rules
 
 ```bash
-skil enable build     # writes /build as a human-only skill into BOTH live trees
-skil disable build    # parks both copies under .skil/parked/commands/build
+skil rules
+skil rules enable pair-programming/behavior
+skil rules disable pair-programming/behavior
 ```
 
-On means "the live pair exists"; off means "only the parked copy exists." There is no separate push/export step — toggling **is** the write, immediately, into `.agents/skills/<name>` and `.claude/skills/<name>` at once. Turning a command on refuses with a clear error (no auto-prefix) if a live folder with that name already exists and isn't skil's own command file.
+- `rules` — list shared `AGENTS.md` sections and other rule files
+- `enable` — turn a shared section on
+- `disable` — turn it off
 
-Per-skill enable/disable (`setSkillEnabled`, park/restore a single catalog skill rather than a command) is GUI-only today — the CLI's `enable`/`disable` verbs take a command name, not a skill id.
+skil keeps its map in `.skil/state.json`.
 
-## 4. Doctor — find problems before you add a key
+## Eval
 
 ```bash
-skil doctor          # one row per command: token-ish cost + warning count
-skil doctor build    # that command's findings, one line why each
+skil doctor
+skil doctor build
+skil usage
 ```
 
-Runs entirely on math + regex, no API key required: **idle-cost** (long always-loaded descriptions), **fat-body** (oversized `SKILL.md`), **unused** (filed skill with no reads — only after this project has usage history and a 14-day grace), **hash-split** (a skill's live/leftover/parked copies disagree), **secret** (a vendor-key-shaped string in the body). Read-only — nothing is persisted or rewritten.
+- `doctor` — checkup per command. Math + regex with no key; conflict / vague-trigger with a key
+- `doctor build` — that command’s findings
+- `usage` — how often Claude actually read a skill
 
-Set `SKIL_LLM_PROVIDER` (`anthropic` | `openai` | `openrouter`) and `SKIL_LLM_API_KEY` in the environment (or save a key on the GUI Settings tab) to unlock two more finding types automatically: **conflict** (two filed skills whose triggers overlap or contradict) and **vague-trigger** (a description too generic to reliably fire). No key means `skil doctor`'s output is unchanged — never a smaller/crippled report, just missing those two types.
-
-## 5. Suggest — what to add next
+## The whole loop
 
 ```bash
+skil scan
+skil skills
 skil suggest
-```
-
-Without a key, prints editorial picks for a role (`--role`, default `swe`) plus a note pointing at the same two env vars `doctor` uses. With a key, fingerprints this project's `package.json` and reranks into ~15-20 ids most likely to match this stack. Never prints a stack trace. `suggest` only prints a shortlist — it never installs anything itself.
-
-## 6. Install — bring a market skill in
-
-```bash
 skil install obra/react-patterns
-```
-
-Installs straight into the live pair (`.agents/skills/<id>` **and** `.claude/skills/<id>`) in one step — no staging area, no dock argument. This is the same write path `skil suggest`'s shortlist and the GUI Discover's `+` both feed into; file the installed id onto a command afterward with `skil add <command> <skillId>` if you want it grouped.
-
-## The whole loop, start to finish
-
-```bash
-skil scan                       # 1. see what's already here
-skil suggest                    # 2. editorial picks (LLM-reranks when a key is set)
-skil install obra/react-patterns
-skil create build --skills tdd  # 3. group into a command
+skil skills enable tdd
+skil create build --skills tdd
 skil add build obra/react-patterns
-skil enable build               # 4. turn it on — both live trees now have it
-skil doctor build               # 5. sanity-check what you just filed
+skil enable build
+skil doctor build
 ```
-
-Re-run `skil scan` any time skill folders change outside this loop — it's pull, so nothing is lost by scanning often.

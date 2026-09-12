@@ -19,15 +19,6 @@ export function runRulesList(engine: ICollectionEngine): CommandOutcome {
   return { message: table.toString(), isError: false, isInfo: true };
 }
 
-export function runRulesShow(engine: ICollectionEngine, id: string): CommandOutcome {
-  const result = engine.readRule(id);
-  if (!isOk(result)) {
-    return { message: result.error.message, isError: true };
-  }
-
-  return { message: result.value, isError: false, isInfo: true };
-}
-
 export function runRulesSetEnabled(
   engine: ICollectionEngine,
   id: string,
@@ -50,13 +41,6 @@ export function registerRulesCommand(program: Command, engine: ICollectionEngine
     .description('List rule files on disk: shared AGENTS.md sections (togglable) and glob rule files (read-only)')
     .action(() => {
       printOutcome(runRulesList(engine));
-    });
-
-  rules
-    .command('show <id>')
-    .description('Print a rule body (shared section id, or a glob rule path like .cursor/rules/foo.mdc)')
-    .action((id: string) => {
-      printOutcome(runRulesShow(engine, id));
     });
 
   rules

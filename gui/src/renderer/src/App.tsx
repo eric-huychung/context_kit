@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowsClockwise, BookOpen, Clock, Compass, Cube, Folder, Gear, Lightning, Moon, Question, Sun, Terminal, Warning, X } from '@phosphor-icons/react';
+import { ArrowsClockwise, BookOpen, Clock, Compass, Folder, Gear, Lightning, Moon, Question, Sun, Terminal, Warning, X } from '@phosphor-icons/react';
 import { useTheme } from './theme';
 import { useBridge } from './bridge-context';
 import { FOCUS_RING } from './lib/focus-ring';
-import { countSkillsBySource, formatScannedAt } from './lib/skill-sources';
+import { formatScannedAt } from './lib/skill-sources';
 import { statusLine, StatusSkeleton } from '../../../../shared/status';
 import { folderLabel, folderPreview } from '../../shared/recent-folders';
-import type { DriftAction, SkillRecord, SyncAudit } from '../../shared/ipc';
+import type { Collection, DriftAction, RuleRecord, SkillRecord, SyncAudit } from '../../shared/ipc';
 import CollectionList from './components/CollectionList';
 import CreateCollectionForm from './components/CreateCollectionForm';
 import InboxPanel from './components/InboxPanel';
@@ -15,7 +15,9 @@ import MarketDiscover from './components/MarketDiscover';
 import WorkspaceWarning from './components/WorkspaceWarning';
 import RulesPanel from './components/RulesPanel';
 import SettingsPanel from './components/SettingsPanel';
+import HelpModal, { type HelpTab } from './components/HelpModal';
 import SyncCleanupModal, { syncBannerText } from './components/SyncCleanupModal';
+import { version as APP_VERSION } from '../../../package.json';
 
 type WorkspaceTab = 'config' | 'search' | 'inbox' | 'collections' | 'rules' | 'settings';
 
@@ -62,6 +64,8 @@ function ConfigPanel({
   const bridge = useBridge();
   const connected = Boolean(root);
   const [skills, setSkills] = useState<SkillRecord[] | null>(null);
+  const [commands, setCommands] = useState<Collection[] | null>(null);
+  const [rules, setRules] = useState<RuleRecord[] | null>(null);
   const [recents, setRecents] = useState<string[] | null>(null);
   const [pendingSwitch, setPendingSwitch] = useState<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
@@ -124,13 +128,23 @@ function ConfigPanel({
   useEffect(() => {
     if (!root) {
       setSkills([]);
+      setCommands([]);
+      setRules([]);
       return;
     }
     let cancelled = false;
     setSkills(null);
-    void bridge.listSkills().then((next) => {
-      if (!cancelled) setSkills(next);
-    });
+    setCommands(null);
+    setRules(null);
+    void Promise.all([bridge.listSkills(), bridge.listCollections(), bridge.listRules()]).then(
+      ([nextSkills, nextCommands, nextRules]) => {
+        if (!cancelled) {
+          setSkills(nextSkills);
+          setCommands(nextCommands);
+          setRules(nextRules);
+        }
+      }
+    );
     return () => {
       cancelled = true;
     };
@@ -151,9 +165,15 @@ function ConfigPanel({
   }, [audit]);
 
   const loadedSkills = skills ?? [];
-  const bySource = countSkillsBySource(loadedSkills);
-  const maxSourceCount = Math.max(...bySource.map((row) => row.count), 1);
-  const syncLoading = recents === null || (connected && skills === null);
+  const loadedCommands = commands ?? [];
+  const loadedRules = rules ?? [];
+  const syncLoading =
+    recents === null || (connected && (skills === null || commands === null || rules === null));
+  const metrics = [
+    { label: 'Skills', count: loadedSkills.length, Icon: Lightning },
+    { label: 'Commands', count: loadedCommands.length, Icon: Terminal },
+    { label: 'Rules', count: loadedRules.length, Icon: BookOpen },
+  ] as const;
 
   return (
     <section className="config-panel panel-section">
@@ -277,29 +297,13 @@ function ConfigPanel({
 
       {!syncLoading && (
         <div className="sync-metrics">
-          <div className="skills-found-card glass-panel">
-            <Cube size={16} weight="regular" className="found-icon" aria-hidden="true" />
-            <p className="found-value">{loadedSkills.length}</p>
-            <p className="found-label">Skills found</p>
-          </div>
-          <div className="skills-source-card glass-panel">
-            <h2>Skills by source</h2>
-            <p className="muted-copy">Where each skill was discovered across your agent config folders.</p>
-            <div className="source-list">
-              {bySource.map(({ source, count }) => (
-                <div className="source-row" key={source}>
-                  <span className="source-name">{source}</span>
-                  <div className="source-bar" aria-hidden="true">
-                    <div
-                      className="source-bar-fill"
-                      style={{ width: `${(count / maxSourceCount) * 100}%` }}
-                    />
-                  </div>
-                  <span className="source-count">{count}</span>
-                </div>
-              ))}
+          {metrics.map(({ label, count, Icon }) => (
+            <div className="sync-metric-card glass-panel" key={label}>
+              <Icon size={16} weight="regular" className="found-icon" aria-hidden="true" />
+              <p className="found-value">{count}</p>
+              <p className="found-label">{label}</p>
             </div>
-          </div>
+          ))}
         </div>
       )}
 
@@ -402,6 +406,8 @@ export default function App() {
   const bridge = useBridge();
   const [tab, setTab] = useState<WorkspaceTab>('collections');
   const [helpOpen, setHelpOpen] = useState(false);
+  const [helpTab, setHelpTab] = useState<HelpTab>('instructions');
+  const [updateOut, setUpdateOut] = useState<string | null>(null);
   const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
   const [lastScannedAt, setLastScannedAt] = useState<Date | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -429,6 +435,16 @@ export default function App() {
     return bridge.onScan(() => {
       setLastScannedAt(new Date());
     });
+  }, [bridge]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void bridge.checkAppUpdate().then((result) => {
+      if (!cancelled && result.ok && result.value.newer) setUpdateOut(result.value.latest);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [bridge]);
 
   const boundRoot = typeof projectRoot === 'string' ? projectRoot : null;
@@ -558,7 +574,10 @@ export default function App() {
             type="button"
             className={`rail-item help-item ${FOCUS_RING}`}
             aria-label="Help"
-            onClick={() => setHelpOpen(true)}
+            onClick={() => {
+              setHelpTab('instructions');
+              setHelpOpen(true);
+            }}
           >
             <Question size={16} weight="regular" aria-hidden="true" />
             <span className="rail-label" aria-hidden="true">
@@ -600,38 +619,24 @@ export default function App() {
 
       <footer className="footer-bar">
         <span>
-          <span className="live-dot" aria-hidden="true" />
+          Free and open source
+          {updateOut ? (
+            <button
+              type="button"
+              className={`footer-update ${FOCUS_RING}`}
+              onClick={() => {
+                setHelpTab('about');
+                setHelpOpen(true);
+              }}
+            >
+              {updateOut} is out
+            </button>
+          ) : null}
         </span>
-        <span>skil 0.5.0</span>
+        <span>skil {APP_VERSION}</span>
       </footer>
 
-      {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
-    </div>
-  );
-}
-
-function HelpModal({ onClose }: { onClose: () => void }) {
-  return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <div
-        className="help-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="help-title"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <button type="button" className={`modal-close ${FOCUS_RING}`} aria-label="Close help" onClick={onClose}>
-          <span aria-hidden="true">×</span>
-        </button>
-        <p className="eyebrow">Support</p>
-        <h2 id="help-title">How can we help?</h2>
-        <p className="muted-copy">
-          Sync, Discover, and toggle all run through the same engine the CLI uses.
-        </p>
-        <button type="button" className={`primary-button ${FOCUS_RING}`} onClick={onClose}>
-          Close
-        </button>
-      </div>
+      {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} initialTab={helpTab} />}
     </div>
   );
 }

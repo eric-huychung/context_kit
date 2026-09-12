@@ -2,11 +2,17 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { Check, Copy } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { BrandIcon } from '@/components/landing/brand-icon'
 
-type Arch = 'silicon' | 'intel'
+export type Arch = 'silicon' | 'intel'
+
+export const RELEASE_DMG: Record<Arch, string> = {
+  silicon:
+    'https://github.com/eric-huychung/skil/releases/latest/download/Skil-arm64.dmg',
+  intel:
+    'https://github.com/eric-huychung/skil/releases/latest/download/Skil-x64.dmg',
+}
 
 const archOptions: { key: Arch; label: string; sub: string }[] = [
   { key: 'silicon', label: 'Apple Silicon', sub: 'M1 · M2 · M3 · M4' },
@@ -14,28 +20,11 @@ const archOptions: { key: Arch; label: string; sub: string }[] = [
 ]
 
 function InstallCliChip() {
-  const [copied, setCopied] = React.useState(false)
-
-  async function handleCopy() {
-    await navigator.clipboard.writeText('brew install skil')
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }
-
   return (
-    <button
-      type="button"
-      onClick={() => void handleCopy()}
-      className="cli-install-chip"
-    >
+    <Link href="/cli" className="cli-install-chip">
       <span className="cli-install-prompt text-muted-foreground">$</span>
-      brew install skil
-      {copied ? (
-        <Check className="size-3.5 text-emerald-500" />
-      ) : (
-        <Copy className="size-3.5 text-muted-foreground" />
-      )}
-    </button>
+      git clone skil
+    </Link>
   )
 }
 
@@ -45,29 +34,41 @@ type DownloadCtaProps = {
   /**
    * "compact" is the hero row: Download + View source + Install CLI.
    * "detailed" adds the Apple Silicon / Intel chip picker above that row
-   * (closing CTA). "nav" is a two-button pair sized for the header.
+   * and grabs the .dmg. "nav" is a two-button pair sized for the header.
    */
   variant?: 'compact' | 'detailed' | 'nav'
+  arch?: Arch
+  onArchChange?: (arch: Arch) => void
+  /** Hide the brew chip — app download page already has a curl path. */
+  showCli?: boolean
 }
 
 /**
- * macOS download control. "detailed" adds an Apple Silicon / Intel chip
- * selector above the button row. All variants share the same three
- * actions as the hero — download, view source, install CLI — so the nav
- * never offers something the hero doesn't.
+ * macOS download control. Compact/nav send you to /app for the Gatekeeper
+ * notes. Detailed grabs the unsigned .dmg for the chip you picked.
  */
 export function DownloadCta({
   align = 'center',
   variant = 'detailed',
+  arch: archProp,
+  onArchChange,
+  showCli = true,
 }: DownloadCtaProps) {
-  const [arch, setArch] = React.useState<Arch>('silicon')
+  const [uncontrolledArch, setUncontrolledArch] = React.useState<Arch>('silicon')
+  const arch = archProp ?? uncontrolledArch
   const active = archOptions.find((a) => a.key === arch)!
   const isDetailed = variant === 'detailed'
   const isNav = variant === 'nav'
+  const isCompact = variant === 'compact'
+
+  function selectArch(next: Arch) {
+    onArchChange?.(next)
+    if (archProp === undefined) setUncontrolledArch(next)
+  }
 
   return (
     <div
-      className={`flex flex-col gap-5 ${
+      className={`flex flex-col ${isCompact ? 'hero-cta gap-4' : 'gap-5'} ${
         align === 'center' ? 'items-center' : 'items-start'
       }`}
     >
@@ -85,7 +86,7 @@ export function DownloadCta({
                 type="button"
                 role="radio"
                 aria-checked={selected}
-                onClick={() => setArch(option.key)}
+                onClick={() => selectArch(option.key)}
                 className={`relative flex flex-col items-start gap-0.5 rounded-xl border px-4 py-3 text-left transition-colors ${
                   selected
                     ? 'border-[var(--accent-blue)]/60 bg-[var(--accent-blue)]/10'
@@ -124,8 +125,16 @@ export function DownloadCta({
         <Button
           size={isNav ? 'default' : 'lg'}
           nativeButton={false}
-          className={isNav ? 'primary-button px-4' : 'primary-button px-6'}
-          render={<Link href="/app" />}
+          className={
+            isNav ? 'primary-button px-4' : isCompact ? 'primary-button' : 'primary-button px-6'
+          }
+          render={
+            isDetailed ? (
+              <a href={RELEASE_DMG[arch]} />
+            ) : (
+              <Link href="/app" />
+            )
+          }
         >
           <BrandIcon src="/logos/apple.svg" className="size-4" />
           {isDetailed ? `Download for ${active.label}` : 'Download for Mac'}
@@ -133,7 +142,9 @@ export function DownloadCta({
         <Button
           size={isNav ? 'default' : 'lg'}
           nativeButton={false}
-          className={isNav ? 'outline-button px-4' : 'outline-button px-6'}
+          className={
+            isNav ? 'outline-button px-4' : isCompact ? 'outline-button' : 'outline-button px-6'
+          }
           render={
             <a
               href="https://github.com/eric-huychung/skil"
@@ -145,12 +156,26 @@ export function DownloadCta({
           <BrandIcon src="/logos/github.svg" className="size-4" />
           View source
         </Button>
-        {!isNav && <InstallCliChip />}
+        {!isNav && showCli && <InstallCliChip />}
       </div>
 
       {isDetailed && (
         <p className="text-xs text-muted-foreground">
-          macOS 12 Monterey or later · Universal .dmg also available
+          macOS 12+ · unsigned .dmg ·{' '}
+          <a
+            href="https://github.com/eric-huychung/skil/releases"
+            target="_blank"
+            rel="noreferrer"
+            className="underline decoration-muted-foreground/40 underline-offset-2 hover:text-foreground"
+          >
+            GitHub Releases
+          </a>
+        </p>
+      )}
+
+      {isCompact && (
+        <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
+          Free and open source. No Login.
         </p>
       )}
     </div>

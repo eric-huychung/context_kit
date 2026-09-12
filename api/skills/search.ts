@@ -1,11 +1,10 @@
 import { getVercelOidcToken } from '@vercel/oidc';
-import { isOk } from '../../dist/core/result.js';
-import { searchSkills } from '../../dist/backend/skills-proxy.js';
+import { handleSearchRequest } from '../../dist/backend/skills-proxy.js';
 
 /**
  * Vercel Function entry point: `GET /api/skills/search?q=<query>`.
- * Thin adapter — all real logic (auth, error mapping) lives in
- * `searchSkills`. Imports compiled `dist/` (not `src/*.js`) because
+ * Thin adapter — query check, OIDC proxy, and generic 502 live in
+ * `handleSearchRequest`. Imports compiled `dist/` (not `src/*.js`) because
  * Node ESM cannot map `.js` specifiers onto `.ts` files; that load-time
  * miss is FUNCTION_INVOCATION_FAILED. Requires "OIDC Federation" enabled
  * in the Vercel project's dashboard settings; that's a one-time manual
@@ -13,23 +12,12 @@ import { searchSkills } from '../../dist/backend/skills-proxy.js';
  */
 export async function GET(request: Request): Promise<Response> {
   try {
-    // request.url may be relative in Vercel production; provide a dummy base to parse params
-    const query = new URL(request.url, 'http://localhost').searchParams.get('q');
-    if (!query) {
-      return Response.json({ error: 'invalid_request', message: "Missing required 'q' query parameter." }, { status: 400 });
-    }
-
-    const result = await searchSkills(query, {
+    return await handleSearchRequest(request, {
       fetchImpl: fetch,
       getOidcToken: () => getVercelOidcToken(),
     });
-
-    if (!isOk(result)) {
-      return Response.json({ error: 'upstream_error', message: result.error.message }, { status: 502 });
-    }
-
-    return Response.json(result.value);
   } catch (error) {
+    console.error(error);
     return Response.json({ error: 'function_error', message: 'Request failed.' }, { status: 500 });
   }
 }

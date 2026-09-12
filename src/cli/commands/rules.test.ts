@@ -4,7 +4,7 @@ import { InMemoryFileSystemAdapter } from '../../adapters/in-memory-fs.js';
 import { InMemorySkillsAdapter } from '../../adapters/in-memory-skills.js';
 import { isOk } from '../../core/result.js';
 import { createProgram } from '../program.js';
-import { runRulesList, runRulesSetEnabled, runRulesShow } from './rules.js';
+import { runRulesList, runRulesSetEnabled } from './rules.js';
 
 function buildEngine(): { engine: CollectionEngine; fs: InMemoryFileSystemAdapter } {
   const fs = new InMemoryFileSystemAdapter();
@@ -47,27 +47,6 @@ describe('runRulesList', () => {
     expect(outcome.isError).toBe(false);
     expect(outcome.message).toContain('glob');
     expect(outcome.message).toContain('.cursor/rules/pair-programming/behavior.mdc');
-  });
-});
-
-describe('runRulesShow', () => {
-  it('prints a shared rule section body', () => {
-    const { engine, fs } = buildEngine();
-    fs.writeFile('AGENTS.md', sharedRuleSection('behavior', 'Be kind.'));
-
-    const outcome = runRulesShow(engine, 'behavior');
-
-    expect(outcome.isError).toBe(false);
-    expect(outcome.message).toContain('Be kind.');
-  });
-
-  it('reports a missing rule', () => {
-    const { engine } = buildEngine();
-
-    const outcome = runRulesShow(engine, 'nope');
-
-    expect(outcome.isError).toBe(true);
-    expect(outcome.message).toMatch(/not found/i);
   });
 });
 
@@ -126,5 +105,19 @@ describe('registerRulesCommand', () => {
     expect(isOk(agents) && agents.value.includes('skil:rule behavior')).toBe(true);
 
     log.mockRestore();
+  });
+
+  it('lists enable and disable on rules --help, not show', () => {
+    const { engine } = buildEngine();
+    const program = createProgram(engine);
+    program.exitOverride();
+    let output = '';
+    program.configureOutput({ writeOut: (text) => { output += text; } });
+
+    expect(() => program.parse(['rules', '--help'], { from: 'user' })).toThrow();
+
+    expect(output).toMatch(/\benable\b/);
+    expect(output).toMatch(/\bdisable\b/);
+    expect(output).not.toMatch(/^\s*show\b/m);
   });
 });

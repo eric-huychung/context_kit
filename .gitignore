@@ -22,7 +22,10 @@ tasks/
 TESTING FOLDER/
 TESTING FOLDER 2/
 skills-lock.json
-tasks/
+tmp-skil-*
+
+# electron-builder
+gui/release/
 
 # ui examples
 ui-example/

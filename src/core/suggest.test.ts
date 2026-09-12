@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { err, isErr, isOk, ok } from './result.js';
 import { parseMarketPicks } from '../backend/market-picks.js';
 import {
+  editorialIdsFromRemote,
   editorialShortlist,
   filterShelvesByRole,
   flattenShelfSkills,
   parsePackageDeps,
   rankByFingerprint,
   rerankWithLlm,
+  resolveEditorialShortlist,
+  suggestLlmCacheKey,
 } from './suggest.js';
 import type { LlmChat } from '../llm/llm-chat.js';
 import type { ShelfRole } from '../backend/market-types.js';
@@ -148,5 +151,27 @@ describe('rerankWithLlm', () => {
     const result = await rerankWithLlm(candidates, ['react'], chat);
 
     expect(isErr(result)).toBe(true);
+  });
+});
+
+describe('editorialIdsFromRemote', () => {
+  it('returns ids for a matching role and undefined when the role is missing', () => {
+    const roles = [{ slug: 'swe', skills: [{ id: 'from/api' }] }];
+    expect(editorialIdsFromRemote(roles, 'swe')).toEqual(['from/api']);
+    expect(editorialIdsFromRemote(roles, 'pm')).toBeUndefined();
+  });
+});
+
+describe('resolveEditorialShortlist', () => {
+  it('uses caller ids when provided and never needs the yaml file', () => {
+    const result = resolveEditorialShortlist('swe', new Set(['skip/me']), ['skip/me', 'from/api']);
+    expect(isOk(result) && result.value).toEqual(['from/api']);
+  });
+});
+
+describe('suggestLlmCacheKey', () => {
+  it('changes when the candidate set changes', () => {
+    expect(suggestLlmCacheKey('swe', ['react'], ['a', 'b'])).toBe(suggestLlmCacheKey('swe', ['react'], ['a', 'b']));
+    expect(suggestLlmCacheKey('swe', ['react'], ['a', 'b'])).not.toBe(suggestLlmCacheKey('swe', ['react'], ['a']));
   });
 });

@@ -1,5 +1,6 @@
 import { Download } from 'lucide-react'
 import { AppPreview } from '@/components/landing/app-preview'
+import { AppInstall } from '@/components/landing/app-install'
 
 export function AppDownload() {
   return (
@@ -7,7 +8,7 @@ export function AppDownload() {
       <div className="mx-auto max-w-6xl">
         <div className="max-w-2xl">
           <div className="glass-panel inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium text-muted-foreground">
-            <Download className="size-3.5" />
+            <Download className="size-3.5" aria-hidden="true" />
             macOS desktop app
           </div>
           <h1 className="mt-5 text-balance font-sans text-3xl font-semibold tracking-tight sm:text-4xl">
@@ -31,6 +32,8 @@ export function AppDownload() {
             ))}
           </ul>
         </div>
+
+        <AppInstall />
 
         <div className="mt-16">
           <AppPreview />

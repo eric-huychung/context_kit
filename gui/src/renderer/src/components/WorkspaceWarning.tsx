@@ -7,12 +7,14 @@ export default function WorkspaceWarning({
   actionLabel,
   onAction,
   actionAriaLabel,
+  title,
   tone = 'warn',
 }: {
   text: string;
   actionLabel?: string;
   onAction?: () => void;
   actionAriaLabel?: string;
+  title?: string;
   tone?: 'warn' | 'ok';
 }) {
   const Icon = tone === 'ok' ? CheckCircle : Warning;
@@ -24,6 +26,7 @@ export default function WorkspaceWarning({
       <button
         type="button"
         className={`workspace-warning${toneClass} workspace-warning-clickable ${FOCUS_RING}`}
+        title={title}
         onClick={onAction}
       >
         {icon}
@@ -33,7 +36,7 @@ export default function WorkspaceWarning({
   }
 
   return (
-    <div className={`workspace-warning${toneClass}`} role="status">
+    <div className={`workspace-warning${toneClass}`} role="status" title={title}>
       {icon}
       <p className="workspace-warning-text">{text}</p>
       {actionLabel && onAction && (

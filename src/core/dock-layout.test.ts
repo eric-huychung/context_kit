@@ -6,6 +6,7 @@ import {
   isDeprecatedPath,
   isLiveSkillPath,
   isParkedPath,
+  isSafeCatalogId,
   liveSkillPaths,
   parkedCommandPath,
   parkedRulePath,
@@ -38,6 +39,26 @@ describe('watchRoots', () => {
     for (const [ide, root] of Object.entries(SKILL_ROOT_BY_IDE)) {
       expect(root.startsWith(`${SKILL_SOURCE_BY_IDE[ide as keyof typeof SKILL_SOURCE_BY_IDE]}/`)).toBe(true);
     }
+  });
+});
+
+describe('isSafeCatalogId', () => {
+  it('allows nested market and command ids', () => {
+    expect(isSafeCatalogId('tdd')).toBe(true);
+    expect(isSafeCatalogId('obra/react-patterns')).toBe(true);
+    expect(isSafeCatalogId('build/ui/brand')).toBe(true);
+    expect(isSafeCatalogId('pair-programming/behavior')).toBe(true);
+  });
+
+  it('rejects path escapes and empty segments', () => {
+    expect(isSafeCatalogId('')).toBe(false);
+    expect(isSafeCatalogId('../evil')).toBe(false);
+    expect(isSafeCatalogId('foo/../bar')).toBe(false);
+    expect(isSafeCatalogId('/etc/passwd')).toBe(false);
+    expect(isSafeCatalogId('foo\\bar')).toBe(false);
+    expect(isSafeCatalogId('foo//bar')).toBe(false);
+    expect(isSafeCatalogId('.')).toBe(false);
+    expect(isSafeCatalogId('..')).toBe(false);
   });
 });
 

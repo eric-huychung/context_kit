@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { isOk } from '../core/result.js';
 import { MarketSync } from './market-sync.js';
 
@@ -20,6 +21,14 @@ function unauthorized(): Response {
   );
 }
 
+function bearerMatches(auth: string | null, cronSecret: string): boolean {
+  const prefix = 'Bearer ';
+  if (!auth || !auth.startsWith(prefix)) return false;
+  const got = createHash('sha256').update(auth.slice(prefix.length)).digest();
+  const expected = createHash('sha256').update(cronSecret).digest();
+  return timingSafeEqual(got, expected);
+}
+
 /**
  * Vercel Cron handler for the weekly market-index refresh. Auth is
  * `Authorization: Bearer $CRON_SECRET` (Vercel sets this automatically
@@ -31,7 +40,7 @@ function unauthorized(): Response {
 export async function handleCronSyncRequest(request: Request, deps: CronSyncDeps): Promise<Response> {
   const { cronSecret, sync } = deps;
   const auth = request.headers.get('authorization');
-  if (!cronSecret || auth !== `Bearer ${cronSecret}`) {
+  if (!cronSecret || !bearerMatches(auth, cronSecret)) {
     return unauthorized();
   }
 

@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import MarketDiscover from './MarketDiscover';
+import MarketDiscover, { clearDiscoverSuggestCache } from './MarketDiscover';
 import { createInMemoryEngine, createTestBridge, renderWithProviders } from '../test-utils';
 import { err, ok, type Result } from '../../../../../src/core/result.js';
 import type { MarketPreviewData, MarketSearchRow, ShelfRole, Skill, SuggestResult } from '../../../shared/ipc.js';
@@ -52,7 +52,27 @@ const PREVIEW: MarketPreviewData = {
   audit: { status: 'pass' },
 };
 
+const SUGGESTED = {
+  updatedAt: '2026-03-09',
+  roles: [
+    {
+      slug: 'swe',
+      label: 'SWE',
+      skills: [{ id: 'obra/react-patterns', name: 'React patterns', installs: 1200, rank: 1 }],
+    },
+    {
+      slug: 'pm',
+      label: 'PM',
+      skills: [{ id: 'pick-pm', name: 'pick-pm', installs: 10, rank: 1 }],
+    },
+  ],
+};
+
 describe('MarketDiscover', () => {
+  beforeEach(() => {
+    clearDiscoverSuggestCache();
+  });
+
   it('stays on Top and Trending when the market index is empty', async () => {
     const engine = createInMemoryEngine();
     const bridge = createTestBridge(engine);
@@ -60,6 +80,8 @@ describe('MarketDiscover', () => {
     renderWithProviders(<MarketDiscover />, { bridge });
 
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Top' })).toBeInTheDocument());
+    expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'skills.sh' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Trending' })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'SWE' })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
@@ -128,7 +150,9 @@ describe('MarketDiscover', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
 
     await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
-    expect(screen.queryByRole('tab', { name: 'SWE' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'skills.sh' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'SWE' })).toBeInTheDocument();
 
     await userEvent.clear(screen.getByLabelText('Search skills'));
     await userEvent.type(screen.getByLabelText('Search skills'), 'zzzz');
@@ -214,6 +238,28 @@ describe('MarketDiscover', () => {
   });
 
   describe('Suggested tab', () => {
+    it('shows the catalog error when the suggested API fails, and never calls the LLM path', async () => {
+      const engine = createInMemoryEngine();
+      const suggest = vi.fn(async (): Promise<Result<SuggestResult>> =>
+        ok({ ids: ['obra/react-patterns'], usedLlm: false })
+      );
+      const bridge = {
+        ...createTestBridge(engine),
+        marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        marketSuggested: async (): Promise<Result<typeof SUGGESTED>> => err(new Error('store_error')),
+        llmStatus: async () => ({ hasKey: false, enabled: false, provider: 'anthropic' as const, keys: [], activeId: null }),
+        suggest,
+      };
+
+      renderWithProviders(<MarketDiscover />, { bridge });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/Couldn't load skills/));
+      expect(suggest).not.toHaveBeenCalled();
+    });
+
     it('still loads editorial picks when the market index is unavailable', async () => {
       const engine = createInMemoryEngine();
       const suggest = vi.fn(async (): Promise<Result<SuggestResult>> =>
@@ -222,6 +268,8 @@ describe('MarketDiscover', () => {
       const bridge = {
         ...createTestBridge(engine),
         marketShelves: async (): Promise<Result<ShelfRole[]>> => err(new Error('store_error')),
+        marketSuggested: async () => ok(SUGGESTED),
+        llmStatus: async () => ({ hasKey: false, enabled: false, provider: 'anthropic' as const, keys: [], activeId: null }),
         suggest,
       };
 
@@ -231,7 +279,7 @@ describe('MarketDiscover', () => {
       await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
 
       await waitFor(() => expect(screen.getByRole('button', { name: 'Add obra/react-patterns' })).toBeInTheDocument());
-      expect(suggest).toHaveBeenCalledWith([], 'swe');
+      expect(suggest).not.toHaveBeenCalled();
     });
 
     it('loads editorial picks without a bound folder', async () => {
@@ -242,6 +290,7 @@ describe('MarketDiscover', () => {
       const bridge = {
         ...createTestBridge(engine),
         marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        marketSuggested: async () => ok(SUGGESTED),
         getProjectRoot: async () => null,
         llmStatus: async () => ({ hasKey: false, enabled: false, provider: 'anthropic' as const, keys: [], activeId: null }),
         suggest,
@@ -252,18 +301,30 @@ describe('MarketDiscover', () => {
 
       await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
 
-      await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
-      expect(suggest).toHaveBeenCalledWith(SHELVES, 'swe');
+      await waitFor(() => expect(screen.getByText('React patterns')).toBeInTheDocument());
+      expect(suggest).not.toHaveBeenCalled();
     });
 
     it('refetches when the suggested role chip changes', async () => {
       const engine = createInMemoryEngine();
-      const suggest = vi.fn(async (_shelves, role): Promise<Result<SuggestResult>> =>
-        ok({ ids: [`pick-${role}`], usedLlm: false })
+      const suggest = vi.fn(async (): Promise<Result<SuggestResult>> =>
+        ok({ ids: ['obra/react-patterns'], usedLlm: false })
       );
       const bridge = {
         ...createTestBridge(engine),
         marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        marketSuggested: async (_role?: string) =>
+          ok({
+            updatedAt: '2026-03-09',
+            roles: [
+              {
+                slug: _role ?? 'swe',
+                label: _role ?? 'SWE',
+                skills: [{ id: `pick-${_role ?? 'swe'}`, name: `pick-${_role ?? 'swe'}`, installs: 1, rank: 1 }],
+              },
+            ],
+          }),
+        llmStatus: async () => ({ hasKey: false, enabled: false, provider: 'anthropic' as const, keys: [], activeId: null }),
         suggest,
       };
 
@@ -275,18 +336,20 @@ describe('MarketDiscover', () => {
 
       await userEvent.click(screen.getByRole('tab', { name: 'PM' }));
       await waitFor(() => expect(screen.getByText('pick-pm')).toBeInTheDocument());
-      expect(suggest).toHaveBeenCalledTimes(2);
+      expect(suggest).not.toHaveBeenCalled();
     });
 
-    it('shows the no-key banner with a working Settings link but still lists picks', async () => {
+    it('shows a compact no-key banner with hover copy and no Settings button', async () => {
       const engine = createInMemoryEngine();
       const onOpenSettings = vi.fn();
       const bridge = {
         ...createTestBridge(engine),
         marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        marketSuggested: async () => ok(SUGGESTED),
         llmStatus: async () => ({ hasKey: false, enabled: false, provider: 'anthropic' as const, keys: [], activeId: null }),
-        suggest: async (): Promise<Result<SuggestResult>> =>
-          ok({ ids: ['obra/react-patterns'], usedLlm: false }),
+        suggest: vi.fn(async (): Promise<Result<SuggestResult>> =>
+          ok({ ids: ['obra/react-patterns'], usedLlm: false })
+        ),
       };
 
       renderWithProviders(<MarketDiscover onOpenSettings={onOpenSettings} />, { bridge });
@@ -295,19 +358,26 @@ describe('MarketDiscover', () => {
       await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
 
       await waitFor(() => expect(screen.getByText(/editorial picks only/i)).toBeInTheDocument());
-      expect(screen.getByText('obra/react-patterns')).toBeInTheDocument();
-      await userEvent.click(screen.getByRole('button', { name: 'Open LLM settings' }));
+      expect(screen.queryByRole('button', { name: 'Open LLM settings' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument();
+      const banner = screen.getByRole('button', { name: /editorial picks only/i });
+      expect(banner).toHaveAttribute('title', expect.stringMatching(/settings/i));
+      expect(screen.getByText('React patterns')).toBeInTheDocument();
+      await userEvent.click(banner);
       expect(onOpenSettings).toHaveBeenCalledTimes(1);
     });
 
     it('shows a ranked shortlist with a working + when a key is saved', async () => {
       const engine = createInMemoryEngine();
+      const suggest = vi.fn(async (): Promise<Result<SuggestResult>> =>
+        ok({ ids: ['obra/react-patterns'], usedLlm: true })
+      );
       const bridge = {
         ...createTestBridge(engine),
         marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        marketSuggested: async () => ok(SUGGESTED),
         llmStatus: async () => ({ hasKey: true, enabled: true, provider: 'anthropic' as const, keys: [], activeId: 'k1' }),
-        suggest: async (): Promise<Result<SuggestResult>> =>
-          ok({ ids: ['obra/react-patterns'], usedLlm: true }),
+        suggest,
       };
 
       renderWithProviders(<MarketDiscover />, { bridge });
@@ -317,6 +387,7 @@ describe('MarketDiscover', () => {
 
       await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
       expect(screen.queryByText(/editorial picks only/i)).not.toBeInTheDocument();
+      expect(suggest).toHaveBeenCalledTimes(1);
       await userEvent.click(screen.getByRole('button', { name: 'Add obra/react-patterns' }));
       await waitFor(() =>
         expect(screen.getByRole('button', { name: 'Added obra/react-patterns' })).toBeInTheDocument()
@@ -325,12 +396,14 @@ describe('MarketDiscover', () => {
 
     it('does not refetch when switching away and back with the same role and key state', async () => {
       const engine = createInMemoryEngine();
+      const marketSuggested = vi.fn(async () => ok(SUGGESTED));
       const suggest = vi.fn(async (): Promise<Result<SuggestResult>> =>
         ok({ ids: ['obra/react-patterns'], usedLlm: true })
       );
       const bridge = {
         ...createTestBridge(engine),
         marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+        marketSuggested,
         llmStatus: async () => ({ hasKey: true, enabled: true, provider: 'anthropic' as const, keys: [], activeId: 'k1' }),
         suggest,
       };
@@ -341,12 +414,57 @@ describe('MarketDiscover', () => {
       await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
       await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
 
-      await userEvent.click(screen.getByRole('tab', { name: 'Top' }));
+      await userEvent.click(screen.getByRole('tab', { name: 'skills.sh' }));
       await waitFor(() => expect(screen.queryByRole('tab', { name: 'Suggested', selected: true })).not.toBeInTheDocument());
 
       await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
       await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
 
+      expect(suggest).toHaveBeenCalledTimes(1);
+      expect(marketSuggested).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not call suggest again after remounting with the key toggled off then on', async () => {
+      const engine = createInMemoryEngine();
+      const suggest = vi.fn(async (): Promise<Result<SuggestResult>> =>
+        ok({ ids: ['obra/react-patterns'], usedLlm: true })
+      );
+      const marketSuggested = vi.fn(async () => ok(SUGGESTED));
+
+      function bridge(enabled: boolean) {
+        return {
+          ...createTestBridge(engine),
+          marketShelves: async (): Promise<Result<ShelfRole[]>> => ok(SHELVES),
+          marketSuggested,
+          llmStatus: async () => ({
+            hasKey: true,
+            enabled,
+            provider: 'anthropic' as const,
+            keys: [],
+            activeId: enabled ? 'k1' : null,
+          }),
+          suggest,
+        };
+      }
+
+      const first = renderWithProviders(<MarketDiscover />, { bridge: bridge(true) });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+      await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
+      expect(suggest).toHaveBeenCalledTimes(1);
+      first.unmount();
+
+      const off = renderWithProviders(<MarketDiscover />, { bridge: bridge(false) });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+      await waitFor(() => expect(screen.getByText('React patterns')).toBeInTheDocument());
+      expect(suggest).toHaveBeenCalledTimes(1);
+      off.unmount();
+
+      renderWithProviders(<MarketDiscover />, { bridge: bridge(true) });
+      await waitFor(() => expect(screen.getByRole('tab', { name: 'Suggested' })).toBeInTheDocument());
+      await userEvent.click(screen.getByRole('tab', { name: 'Suggested' }));
+      await waitFor(() => expect(screen.getByText('obra/react-patterns')).toBeInTheDocument());
       expect(suggest).toHaveBeenCalledTimes(1);
     });
   });

@@ -117,8 +117,10 @@ describe('vercel.json cron schedule', () => {
   it('runs /api/cron/sync-market once a week', () => {
     const vercel = JSON.parse(readFileSync(join(process.cwd(), 'vercel.json'), 'utf8')) as {
       crons?: Array<{ path: string; schedule: string }>;
+      headers?: Array<{ source: string; headers: Array<{ key: string; value: string }> }>;
     };
 
     expect(vercel.crons).toEqual([{ path: '/api/cron/sync-market', schedule: '0 0 * * 0' }]);
+    expect(vercel.headers?.some((entry) => entry.headers.some((h) => h.key === 'X-Content-Type-Options'))).toBe(true);
   });
 });

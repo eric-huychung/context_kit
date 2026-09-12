@@ -30,6 +30,7 @@ const bridge: SkilBridge = {
   deleteSkill: (skillId) => ipcRenderer.invoke(IPC_CHANNELS.deleteSkill, skillId),
   usage: () => ipcRenderer.invoke(IPC_CHANNELS.usage),
   marketShelves: () => ipcRenderer.invoke(IPC_CHANNELS.marketShelves),
+  marketSuggested: (role) => ipcRenderer.invoke(IPC_CHANNELS.marketSuggested, role),
   marketSearch: (query) => ipcRenderer.invoke(IPC_CHANNELS.marketSearch, query),
   marketPreview: (id) => ipcRenderer.invoke(IPC_CHANNELS.marketPreview, id),
   readSkillMd: (skillId) => ipcRenderer.invoke(IPC_CHANNELS.readSkillMd, skillId),
@@ -51,6 +52,7 @@ const bridge: SkilBridge = {
   revealLlmKey: (id) => ipcRenderer.invoke(IPC_CHANNELS.revealLlmKey, id),
   removeLlmKey: (id) => ipcRenderer.invoke(IPC_CHANNELS.removeLlmKey, id),
   suggest: (shelves, role) => ipcRenderer.invoke(IPC_CHANNELS.suggest, shelves, role),
+  checkAppUpdate: () => ipcRenderer.invoke(IPC_CHANNELS.checkAppUpdate),
 };
 
 contextBridge.exposeInMainWorld('skil', bridge);

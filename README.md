@@ -1,5 +1,7 @@
 # skil
 
+[![CI](https://github.com/eric-huychung/skil/actions/workflows/ci.yml/badge.svg)](https://github.com/eric-huychung/skil/actions/workflows/ci.yml)
+
 Give your agent skills a home.
 
 Find skills, file them onto workflows like `/build`, and see which ones still earn their spot.
@@ -10,7 +12,28 @@ Open source. macOS app + CLI. No login.
 
 ## Install
 
-App: [skil.website](https://www.skil.website/)
+**App** — `.dmg` from [skil.website](https://www.skil.website/) or [Releases](https://github.com/eric-huychung/skil/releases). Unsigned on purpose (no Apple tax). macOS will yell. My bad, I'm broke.
+
+1. Drag Skil into Applications.
+2. Double-click. If it blocks: **System Settings → Privacy & Security → Open Anyway** (password / Touch ID). Once is enough.
+
+Or skip the scare. Curl doesn’t get the browser quarantine stamp:
+
+```bash
+curl -L -o ~/Downloads/skil.dmg \
+  https://github.com/eric-huychung/skil/releases/latest/download/Skil-arm64.dmg
+open ~/Downloads/skil.dmg
+```
+
+Drag it in, then:
+
+```bash
+xattr -cr /Applications/Skil.app
+```
+
+Intel Mac? Same URL with `x64` instead of `arm64`.
+
+**CLI** — from this repo:
 
 ```bash
 git clone https://github.com/eric-huychung/skil.git

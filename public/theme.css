@@ -45,6 +45,8 @@
   --hover-foreground: var(--foreground);
   --import-hover-fill: var(--muted);
   --import-hover-foreground: var(--foreground);
+  /* Nav hover pill: dusty purple-gray, darker and less chroma than the old mid-purple fill */
+  --nav-hover: oklch(0.48 0.035 var(--brand-hue));
 
   --surface: var(--background);
   --surface-raised: rgb(var(--glass-bg-strong));
@@ -96,6 +98,8 @@
   --hover-foreground: oklch(0.96 0.002 var(--brand-hue));
   --import-hover-fill: oklch(1 0 0);
   --import-hover-foreground: oklch(0.19 0.03 var(--brand-hue));
+  /* ~#352f3d — dark gray with a purple hitch, same family as Kiro's nav chip */
+  --nav-hover: oklch(0.32 0.022 var(--brand-hue));
 
   --surface: var(--background);
   --surface-raised: rgb(var(--glass-bg-strong));

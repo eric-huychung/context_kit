@@ -20,4 +20,9 @@ const discover = createDiscover({
   browse: (view) => engine.browse(view),
 });
 const program = createProgram(engine, discover);
-await program.parseAsync(process.argv);
+try {
+  await program.parseAsync(process.argv);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+}

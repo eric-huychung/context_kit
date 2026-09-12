@@ -4,6 +4,7 @@ import type { Discover } from '../../backend/discover.js';
 import { SEED_ROLES } from '../../backend/market-seed.js';
 import type { ICollectionEngine } from '../../interfaces/engine.js';
 import { isOk } from '../../core/result.js';
+import { editorialIdsFromRemote } from '../../core/suggest.js';
 import { printOutcome, type CommandOutcome } from '../output.js';
 
 const ROLE_SLUGS = new Set(SEED_ROLES.map((role) => role.slug));
@@ -24,12 +25,15 @@ export async function runSuggest(
     };
   }
 
-  const shelvesResult = await discover.shelves();
+  const [shelvesResult, suggestedResult] = await Promise.all([discover.shelves(), discover.suggested(role)]);
   if (!isOk(shelvesResult)) {
     return { message: 'Could not load the market index. Try again in a moment.', isError: true };
   }
 
-  const suggestResult = await engine.suggest(shelvesResult.value, { role });
+  const editorialIds = isOk(suggestedResult)
+    ? editorialIdsFromRemote(suggestedResult.value.roles, role)
+    : undefined;
+  const suggestResult = await engine.suggest(shelvesResult.value, { role, editorialIds });
   if (!isOk(suggestResult)) {
     return { message: suggestResult.error.message, isError: true };
   }

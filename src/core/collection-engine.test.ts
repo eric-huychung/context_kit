@@ -9,6 +9,7 @@ import { InMemoryUsageCollector } from '../adapters/in-memory-usage.js';
 import { RealFileSystemAdapter } from '../adapters/real-fs-adapter.js';
 import type { IDE } from '../types/index.js';
 import type { LlmChat } from '../llm/llm-chat.js';
+import { LlmCallCache } from '../llm/llm-call-cache.js';
 
 function backdateFirstCommand(disk: InMemoryFileSystemAdapter, createdAt: string): void {
   const loaded = disk.readJSON<{ commands: Array<{ createdAt: string }> }>(STATE_PATH);
@@ -419,6 +420,17 @@ describe('CollectionEngine', () => {
       expect(isOk(fs.readFile('.claude/skills/obra/react-patterns/SKILL.md'))).toBe(true);
       expect(isErr(fs.readFile('.agents/skills/react-patterns/SKILL.md'))).toBe(true);
       expect(npx.getInstalls()).toEqual([{ skillId: 'obra/react-patterns' }]);
+    });
+
+    it('rejects a skill id that would escape the project folder', async () => {
+      const result = await engine.install('../evil');
+
+      expect(isErr(result)).toBe(true);
+      if (isErr(result)) {
+        expect(result.error.message).toMatch(/invalid skill id/i);
+      }
+      expect(skills.getInstalls()).toEqual([]);
+      expect(engine.skills()).toEqual([]);
     });
 
     it('never creates a leftover skill root', async () => {
@@ -1941,6 +1953,40 @@ describe('CollectionEngine', () => {
         expect(result.value.usedLlm).toBe(true);
         expect(result.value.ids).toEqual(['obra/react-patterns', 'vercel-labs/nextjs-guide']);
       }
+    });
+
+    it('uses editorialIds from the market API instead of the yaml file', async () => {
+      const result = await engine.suggest(shelves, { role: 'swe', editorialIds: ['from/api'] });
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        expect(result.value.usedLlm).toBe(false);
+        expect(result.value.ids).toEqual(['from/api']);
+      }
+    });
+
+    it('does not POST twice for the same role, deps, and candidates', async () => {
+      fs.writeFile('package.json', JSON.stringify({ dependencies: { react: '^18.0.0' } }));
+      const complete = vi.fn(async () => ok(JSON.stringify({ ids: ['obra/react-patterns'] })));
+      const withLlm = new CollectionEngine(fs, skills, undefined, undefined, { complete });
+
+      await withLlm.suggest(shelves, { role: 'swe' });
+      await withLlm.suggest(shelves, { role: 'swe' });
+
+      expect(complete).toHaveBeenCalledTimes(1);
+    });
+
+    it('reuses the LLM cache when a new engine is built with the same cache (key rebind)', async () => {
+      fs.writeFile('package.json', JSON.stringify({ dependencies: { react: '^18.0.0' } }));
+      const complete = vi.fn(async () => ok(JSON.stringify({ ids: ['obra/react-patterns'] })));
+      const cache = new LlmCallCache();
+      const first = new CollectionEngine(fs, skills, undefined, undefined, { complete }, cache);
+      const rebound = new CollectionEngine(fs, skills, undefined, undefined, { complete }, cache);
+
+      await first.suggest(shelves, { role: 'swe' });
+      await rebound.suggest(shelves, { role: 'swe' });
+
+      expect(complete).toHaveBeenCalledTimes(1);
     });
 
     it('persists nothing to state.json', async () => {

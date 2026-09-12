@@ -1,0 +1,41 @@
+name: Feature
+description: Ask for something new.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Search existing issues first. One ask per issue.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where
+      options:
+        - CLI
+        - macOS app
+        - Website
+        - Docs
+    validations:
+      required: true
+  - type: textarea
+    id: want
+    attributes:
+      label: What
+      description: What should exist that doesn't.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The job this would do. Not "would be nice."
+    validations:
+      required: true
+  - type: checkboxes
+    id: coc
+    attributes:
+      label: Code of Conduct
+      description: [CODE_OF_CONDUCT.md](https://github.com/eric-huychung/skil/blob/main/CODE_OF_CONDUCT.md)
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true

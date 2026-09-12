@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/eric-huychung/skil/security/advisories/new
+    about: Don't open a public issue for a vulnerability. GitHub keeps this private.
+  - name: Contributing
+    url: https://github.com/eric-huychung/skil/blob/main/CONTRIBUTING.md
+    about: How to run tests and send a PR.

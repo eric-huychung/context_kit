@@ -5,6 +5,7 @@ import { SkillsAdapter } from './adapters/skills-adapter.js';
 import { ClaudeUsageCollector } from './adapters/claude-usage-collector.js';
 import { getApiBaseUrl } from './config/website.js';
 import type { LlmChat } from './llm/llm-chat.js';
+import { LlmCallCache } from './llm/llm-call-cache.js';
 
 /**
  * Composition root: wires the real adapters into a CollectionEngine for
@@ -16,17 +17,21 @@ import type { LlmChat } from './llm/llm-chat.js';
  * paths and `npx` cwd bind to that folder. CLI omits it and
  * gets `process.cwd()`. GUI rebuilds via `createEngine(pickedPath)`.
  *
- * `llmChat` is optional (default none), same pattern as `UsageCollector`:
- * CLI builds one from env vars (`llmChatFromEnv`), GUI from saved
- * Settings. Without one, `health()`'s LLM slice (conflict/vague-trigger)
- * never runs and the report stays Phase 1's math+regex shape.
+ * `llmChat` is optional (default none). `llmCallCache` is optional too:
+ * the GUI reuses one cache across LLM key rebinds so suggest/doctor do
+ * not POST again for the same project.
  */
-export function createEngine(projectRoot: string = process.cwd(), llmChat?: LlmChat): ICollectionEngine {
+export function createEngine(
+  projectRoot: string = process.cwd(),
+  llmChat?: LlmChat,
+  llmCallCache?: LlmCallCache
+): ICollectionEngine {
   return new CollectionEngine(
     new RealFileSystemAdapter(projectRoot),
     new SkillsAdapter(getApiBaseUrl(), projectRoot),
     new ClaudeUsageCollector(),
     projectRoot,
-    llmChat
+    llmChat,
+    llmCallCache
   );
 }

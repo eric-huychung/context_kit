@@ -27,6 +27,7 @@ export async function GET(request: Request): Promise<Response> {
     const store = new SupabaseMarketStore(supabase);
     return await handleShelvesRequest(request, { store });
   } catch (error) {
+    console.error(error);
     return Response.json({ error: 'function_error', message: 'Request failed.' }, { status: 500 });
   }
 }
